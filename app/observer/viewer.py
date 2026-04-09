@@ -132,7 +132,7 @@ body{font-family:-apple-system,"PingFang SC",monospace;background:#0a0a0f;color:
 ::-webkit-scrollbar-thumb{background:#333;border-radius:3px}
 </style></head><body>
 <div class="hdr">
-  <h1>🔍 SightOps 观察器</h1>
+  <h1>SightOps 观察器</h1>
   <span class="st" id="st">● 启动中...</span>
   <span class="badge" id="bg">0</span>
 </div>
@@ -154,9 +154,9 @@ window.appendEntry=function(e){
   d.className='entry';
   var h='<div class="entry-bar"><span>Cycle '+e.cycle+'</span><span class="t">'+e.time+'</span></div>';
   if(e.img) h+='<div class="img-wrap"><img src="'+e.img+'"></div>';
-  if(e.analysis) h+='<div class="sec"><div class="lbl">📋 屏幕分析</div><div class="txt">'+esc(e.analysis)+'</div></div>';
-  if(e.plan) h+='<div class="sec"><div class="lbl">🎯 操作计划</div><div class="txt">'+esc(e.plan)+'</div></div>';
-  if(e.error) h+='<div class="err">⚠ '+esc(e.error)+'</div>';
+  if(e.analysis) h+='<div class="sec"><div class="lbl">屏幕分析</div><div class="txt">'+esc(e.analysis)+'</div></div>';
+  if(e.plan) h+='<div class="sec"><div class="lbl">操作计划</div><div class="txt">'+esc(e.plan)+'</div></div>';
+  if(e.error) h+='<div class="err">ERR '+esc(e.error)+'</div>';
   d.innerHTML=h;
   log.appendChild(d);
   log.scrollTop=log.scrollHeight;

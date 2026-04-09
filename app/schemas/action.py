@@ -12,11 +12,15 @@ class ActionType(str, Enum):
     CLICK_AT = "click_at"
     DOUBLE_CLICK_AT = "double_click_at"
     RIGHT_CLICK_AT = "right_click_at"
+    TRIPLE_CLICK_AT = "triple_click_at"
     TYPE_TEXT = "type_text"
     HOTKEY = "hotkey"
     DRAG_TO = "drag_to"
+    DRAG_BY = "drag_by"
     SCROLL = "scroll"
+    SCROLL_AT = "scroll_at"
     WAIT = "wait"
+    SCREENSHOT = "screenshot"
     DONE = "done"
     HUMAN = "human"
 
@@ -28,6 +32,8 @@ class PlannedAction(BaseModel):
     reason: str = ""
     x: float | None = None
     y: float | None = None
+    dx: float | None = None
+    dy: float | None = None
     description: str | None = None
     text: str | None = None
     keys: list[str] | None = None
@@ -35,6 +41,7 @@ class PlannedAction(BaseModel):
     amount: int | None = None
     seconds: float | None = None
     message: str | None = None
+    click_count: int | None = None
 
 
 class ActionPlan(BaseModel):
@@ -42,6 +49,31 @@ class ActionPlan(BaseModel):
 
     steps: list[PlannedAction]
     confidence: float = 1.0
+    notes: str = ""
+
+
+class PageState(BaseModel):
+    """Understanding of the current screen state."""
+    app_name: str = ""
+    page_type: str = ""
+    visible_elements: list[str] = []
+    url_visible: str = ""
+    errors_or_dialogs: list[str] = []
+    is_loading: bool = False
+    confidence: float = 1.0
+
+
+class VerificationResult(BaseModel):
+    """Result of action verification."""
+    success: bool
+    explanation: str = ""
+    retry_suggested: bool = False
+
+
+class ExecutionResult(BaseModel):
+    """Final result of a ComputerAgent.run() call."""
+    status: str
+    actions: list[PlannedAction]
     notes: str = ""
 
 

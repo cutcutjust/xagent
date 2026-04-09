@@ -1,14 +1,27 @@
-You are verifying whether an action succeeded.
+You are verifying whether a desktop action succeeded.
 
-EXPECTED OUTCOME: $expected_outcome
-CURRENT URL: $current_url
+You will see two screenshots: BEFORE (before the action) and AFTER (after the action).
 
-Look at the screenshot. Has the expected outcome been achieved?
+Action that was performed: $action_description
+Expected outcome: $expected_outcome
 
-Consider:
-- Is the expected element visible?
-- Did the page navigate to the right place?
-- Are there any error messages?
-- Is the content you expected to see present?
+Compare the two screenshots and determine:
+1. Did the visual change match what was expected?
+2. If not, what actually happened instead?
+3. Should the action be retried?
 
-Return JSON: {"success": true/false, "explanation": "brief reason"}
+Return ONLY valid JSON:
+{
+  "success": true,
+  "explanation": "The search box is now focused with a text cursor visible",
+  "retry_suggested": false
+}
+
+Or if it failed:
+{
+  "success": false,
+  "explanation": "The click did not focus the search box — the page looks identical. The coordinates may have missed.",
+  "retry_suggested": true
+}
+
+Be specific about what changed (or did not change) between the two screenshots.
