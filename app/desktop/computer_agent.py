@@ -206,19 +206,20 @@ class ComputerAgent:
             # ── PHASE 2: THINK ──
             self._log("  LLM 分析中...", "dim")
             plan = None
-            for retry in range(2):
+            max_retries = 2
+            for retry in range(max_retries):
                 try:
                     plan = await self._observe_and_decide(obs, task, context)
                     if plan and plan.steps:
                         break
                     if plan and plan.confidence == 0.0:
-                        self._log(f"  LLM 返回空动作计划 (重试 {retry+1}/1)", "yellow")
+                        self._log(f"  LLM 返回空动作计划 (重试 {retry+1}/{max_retries})", "yellow")
                         await asyncio.sleep(1)
                 except asyncio.TimeoutError:
-                    self._log(f"  LLM 调用超时 (重试 {retry+1}/1)", "red")
+                    self._log(f"  LLM 调用超时 (重试 {retry+1}/{max_retries})", "red")
                     await asyncio.sleep(1)
                 except Exception as e:
-                    self._log(f"  LLM 调用失败: {type(e).__name__}: {e} (重试 {retry+1}/1)", "red")
+                    self._log(f"  LLM 调用失败: {type(e).__name__}: {e} (重试 {retry+1}/{max_retries})", "red")
                     await asyncio.sleep(1)
 
             if not plan or (not plan.steps and not plan.notes):
@@ -316,10 +317,10 @@ class ComputerAgent:
 
         full_prompt = _SYSTEM_PROMPT + "\n\n" + "\n".join(prompt_parts)
 
-        # Timeout-protected LLM call (30s — normal calls complete in ~8s)
+        # Timeout-protected LLM call (60s — normal calls complete in ~8s, but occasional ones take 30s+)
         raw = await asyncio.wait_for(
             vision_chat(text_prompt=full_prompt, image_path=obs.screenshot_path, max_tokens=1024),
-            timeout=30,
+            timeout=60,
         )
 
         try:
