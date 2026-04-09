@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pyautogui
+from rich.console import Console
 
 from app.core.errors import HumanReviewRequired
 from app.core.logger import logger
@@ -14,6 +15,8 @@ from app.desktop.executor import execute_desktop
 from app.desktop.observer import observe_desktop
 from app.llm.client import vision_chat
 from app.schemas.action import ActionPlan, ActionType, ExecutionResult, PlannedAction
+
+_console = Console()
 
 # ── 系统提示词 ───────────────────────────────────────────────────────────
 
@@ -101,13 +104,23 @@ class ComputerAgent:
         max_cycles: int = 30,
         max_stuck_cycles: int = 5,
         stop_event: object = None,
+        verbose: bool = True,
     ):
         self.max_cycles = max_cycles
         self.max_stuck_cycles = max_stuck_cycles
         self._stop_event = stop_event
+        self._verbose = verbose
         self._history: list[str] = []
         self._actions_executed: list[PlannedAction] = []
-        self._last_actions: list[str] = []  # for stuck detection
+        self._last_actions: list[str] = []
+
+    def _log(self, msg: str, style: str = "") -> None:
+        """Print to console if verbose."""
+        if self._verbose:
+            if style:
+                _console.print(f"    [{style}]{msg}[/{style}]")
+            else:
+                _console.print(f"    {msg}")
 
     async def run(
         self,
@@ -126,102 +139,91 @@ class ComputerAgent:
             ExecutionResult with status and actions taken
         """
         logger.info(f"[ComputerAgent] Starting task: {task}")
+        self._log(f"[Agent] 任务: {task}", "dim")
 
         for cycle in range(1, self.max_cycles + 1):
-            # Check stop event (for external cancellation)
+            # Check stop event
             if self._stop_event and self._stop_event.is_set():
-                logger.info("[ComputerAgent] Stop event triggered")
-                return ExecutionResult(
-                    status="cancelled",
-                    actions=self._actions_executed,
-                    notes="Stopped by external event",
-                )
+                return ExecutionResult(status="cancelled", actions=self._actions_executed, notes="Stopped")
 
             # ── PHASE 1: SEE ──
-            obs = await observe_desktop(
-                task_description=task,
-                previous_action_summary=" | ".join(self._history[-5:]) if self._history else "Start",
-            )
+            self._log(f"Cycle {cycle}/{self.max_cycles} — 截图分析...", "dim")
+            try:
+                obs = await observe_desktop(
+                    task_description=task,
+                    previous_action_summary=" | ".join(self._history[-5:]) if self._history else "Start",
+                )
+            except Exception as e:
+                self._log(f"截图失败: {e}", "red")
+                await asyncio.sleep(2)
+                continue
 
             # ── PHASE 2: THINK ──
-            plan = await self._observe_and_decide(obs, task, context)
+            self._log("  LLM 分析中...", "dim")
+            try:
+                plan = await self._observe_and_decide(obs, task, context)
+            except Exception as e:
+                self._log(f"LLM 调用失败: {e}", "red")
+                await asyncio.sleep(2)
+                continue
 
             # Check terminal states
             if self._has_done_action(plan):
-                logger.info(f"[ComputerAgent] Task done after {cycle} cycles")
-                return ExecutionResult(
-                    status="done",
-                    actions=self._actions_executed,
-                    notes=plan.notes,
-                )
+                self._log("  任务完成", "green")
+                return ExecutionResult(status="done", actions=self._actions_executed, notes=plan.notes)
 
             if self._has_human_action(plan):
                 msg = self._get_human_message(plan)
-                logger.warning(f"[ComputerAgent] Human required: {msg}")
+                self._log(f"  需要人工: {msg}", "yellow")
                 raise HumanReviewRequired(msg)
 
-            # Stuck detection
             if self._is_stuck(plan):
-                logger.warning(f"[ComputerAgent] Stuck after {cycle} cycles")
+                self._log(f"  卡住了（连续重复动作）", "red")
                 raise HumanReviewRequired(
                     f"Stuck after {cycle} cycles. Last actions: {self._last_actions[-3:]}. "
                     f"Notes: {plan.notes}"
                 )
 
             if not plan.steps:
-                logger.warning(f"[ComputerAgent] Cycle {cycle}: empty plan")
+                self._log("  无动作计划，滚动尝试", "yellow")
                 if "done" in plan.notes.lower() or "完成" in plan.notes.lower():
-                    return ExecutionResult(
-                        status="done",
-                        actions=self._actions_executed,
-                        notes=plan.notes,
-                    )
-                # Add a scroll to explore
+                    return ExecutionResult(status="done", actions=self._actions_executed, notes=plan.notes)
                 plan.steps = [PlannedAction(
-                    action=ActionType.SCROLL,
-                    direction="down",
-                    amount=10,
+                    action=ActionType.SCROLL, direction="down", amount=10,
                     reason="No action planned, scrolling to explore",
                 )]
 
+            # Print what the model observed
+            self._log(f"  识别: {plan.notes[:80] if plan.notes else ''}", "dim")
+
             # ── PHASE 3: ACT ──
             for step in plan.steps:
-                if step.action in (ActionType.DONE,):
-                    return ExecutionResult(
-                        status="done",
-                        actions=self._actions_executed,
-                        notes=step.reason or plan.notes,
-                    )
+                if step.action == ActionType.DONE:
+                    self._log(f"  {step.action.value}: {step.reason or ''}", "green")
+                    return ExecutionResult(status="done", actions=self._actions_executed, notes=step.reason or plan.notes)
                 if step.action == ActionType.HUMAN:
                     raise HumanReviewRequired(step.message or step.reason)
                 if step.action == ActionType.SCREENSHOT:
-                    continue  # Already captured in SEE phase
+                    continue
 
+                self._log(f"  {step.action.value}: {step.reason or ''}", "dim")
                 try:
                     await execute_desktop(step)
                     self._actions_executed.append(step)
                     action_desc = f"{step.action.value}: {step.reason or ''}"
                     self._history.append(action_desc)
                     self._last_actions.append(action_desc)
-                    # Keep last N actions for stuck detection
                     if len(self._last_actions) > 10:
                         self._last_actions = self._last_actions[-10:]
                 except Exception as e:
+                    self._log(f"  执行失败: {e}", "red")
                     logger.warning(f"[ComputerAgent] Execution failed: {e}")
                     self._history.append(f"FAIL: {step.action.value} - {e}")
 
-            # ── PHASE 4: VERIFY ── (implicit in next cycle's SEE)
-            # The next cycle will take a new screenshot and the model will
-            # naturally verify by comparing expected vs actual state.
-            # Add a small delay for page rendering
             await asyncio.sleep(0.5)
 
-        logger.warning(f"[ComputerAgent] Max cycles ({self.max_cycles}) reached")
-        return ExecutionResult(
-            status="max_cycles",
-            actions=self._actions_executed,
-            notes=f"Reached max cycles ({self.max_cycles})",
-        )
+        self._log(f"达到最大循环次数 ({self.max_cycles})", "yellow")
+        return ExecutionResult(status="max_cycles", actions=self._actions_executed, notes=f"Reached max cycles ({self.max_cycles})")
 
     async def _observe_and_decide(
         self,
@@ -229,7 +231,7 @@ class ComputerAgent:
         task: str,
         context: dict | None = None,
     ) -> ActionPlan:
-        """Single LLM call: observe page state + decide next actions."""
+        """Single LLM call with timeout: observe page state + decide next actions."""
         prompt_parts = [
             f"TASK: {task}",
             f"SCREEN: {obs.screen_width}x{obs.screen_height}",
@@ -243,61 +245,51 @@ class ComputerAgent:
 
         full_prompt = _SYSTEM_PROMPT + "\n\n" + "\n".join(prompt_parts)
 
-        raw = await vision_chat(
-            text_prompt=full_prompt,
-            image_path=obs.screenshot_path,
-            max_tokens=1024,
+        # Timeout-protected LLM call
+        raw = await asyncio.wait_for(
+            vision_chat(text_prompt=full_prompt, image_path=obs.screenshot_path, max_tokens=1024),
+            timeout=120,  # 2 minute timeout
         )
 
         try:
             data = json.loads(_extract_json(raw))
-            # Handle nested observation + plan structure
             if "steps" in data:
                 return ActionPlan(**data)
-            # Handle combined observation + plan structure
             if "plan" in data:
                 return ActionPlan(**data["plan"])
             return ActionPlan(
-                steps=[],
-                confidence=data.get("confidence", 0.0),
+                steps=[], confidence=data.get("confidence", 0.0),
                 notes=json.dumps(data, ensure_ascii=False)[:500],
             )
         except Exception as e:
             logger.warning(f"[ComputerAgent] Plan parse error: {e}")
             return ActionPlan(
-                steps=[],
-                confidence=0.0,
+                steps=[], confidence=0.0,
                 notes=f"parse error: {e}\n{raw[:200]}",
             )
 
     def _has_done_action(self, plan: ActionPlan) -> bool:
-        """Check if the plan contains a 'done' action."""
         if not plan.steps:
             return False
         return any(s.action == ActionType.DONE for s in plan.steps)
 
     def _has_human_action(self, plan: ActionPlan) -> bool:
-        """Check if the plan requires human intervention."""
         if not plan.steps:
             return False
         return any(s.action == ActionType.HUMAN for s in plan.steps)
 
     def _get_human_message(self, plan: ActionPlan) -> str:
-        """Extract the human help message from the plan."""
         for s in plan.steps:
             if s.action == ActionType.HUMAN:
                 return s.message or s.reason
         return plan.notes or "Human intervention required"
 
     def _is_stuck(self, plan: ActionPlan) -> bool:
-        """Detect if the agent is stuck (repeating same actions)."""
         if not plan.steps:
             return False
         current = f"{plan.steps[0].action.value}:{plan.steps[0].description or ''}"
-        # Check if the same action has been repeated too many times
         if self._last_actions.count(current) >= self.max_stuck_cycles:
             return True
-        # Check low confidence repeatedly
         if plan.confidence < 0.3 and len(self._history) > 10:
             recent_fails = sum(1 for h in self._history[-10:] if "FAIL" in h)
             if recent_fails >= 3:
