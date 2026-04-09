@@ -50,6 +50,16 @@ To open or switch to an application, use Cmd+Space then type the app name:
 
 Do NOT click dock icons — they are unreliable (app may already be running but window hidden). Spotlight always works.
 
+## Navigating to a URL in Browser — ALWAYS Do This
+To navigate to a URL, use this exact sequence:
+1. hotkey: keys=["command", "l"] — focus and select the address bar (Cmd+L selects all)
+2. wait: seconds=0.3 — brief pause
+3. type_text: text="https://x.com" — type the URL (address bar is already selected)
+4. hotkey: keys=["return"] — navigate to the URL
+5. wait: seconds=3.0 — wait for page to fully load
+
+Do NOT click the address bar with mouse coordinates — Cmd+L is more reliable and always selects all existing text.
+
 ## macOS Keyboard Shortcuts Reference
 - Cmd+Space: Spotlight search (for opening apps)
 - Cmd+Tab: Switch between running applications
@@ -247,6 +257,8 @@ class ComputerAgent:
 
             await asyncio.sleep(1)
 
+            await asyncio.sleep(1)
+
         self._log(f"达到最大循环次数 ({self.max_cycles})", "yellow")
         return ExecutionResult(status="max_cycles", actions=self._actions_executed, notes=f"Reached max cycles ({self.max_cycles})")
 
@@ -319,6 +331,10 @@ class ComputerAgent:
         pattern = f"{current_action}:{current_desc}"
         matches = sum(1 for a in self._last_actions if a.startswith(f"{current_action}:"))
         if matches >= self.max_stuck_cycles:
+            return True
+        # Also detect repeated action type even with different descriptions
+        type_count = sum(1 for a in self._last_actions if a.startswith(f"{current_action}:"))
+        if type_count >= self.max_stuck_cycles + 2:
             return True
         if plan.confidence < 0.3 and len(self._history) > 10:
             recent_fails = sum(1 for h in self._history[-10:] if "FAIL" in h)
