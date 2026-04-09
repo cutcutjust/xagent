@@ -175,28 +175,28 @@ class ComputerAgent:
             # ── PHASE 2: THINK ──
             self._log("  LLM 分析中...", "dim")
             plan = None
-            for retry in range(3):
+            for retry in range(2):
                 try:
                     plan = await self._observe_and_decide(obs, task, context)
                     if plan and plan.steps:
                         break
                     if plan and plan.confidence == 0.0:
-                        self._log(f"  LLM 返回空动作计划 (重试 {retry+1}/2)", "yellow")
+                        self._log(f"  LLM 返回空动作计划 (重试 {retry+1}/1)", "yellow")
                         await asyncio.sleep(1)
                 except asyncio.TimeoutError:
-                    self._log(f"  LLM 调用超时 (重试 {retry+1}/2)", "yellow")
-                    await asyncio.sleep(2)
+                    self._log(f"  LLM 调用超时 (重试 {retry+1}/1)", "red")
+                    await asyncio.sleep(1)
                 except Exception as e:
-                    self._log(f"  LLM 调用失败: {e} (重试 {retry+1}/2)", "yellow")
-                    await asyncio.sleep(2)
+                    self._log(f"  LLM 调用失败: {type(e).__name__}: {e} (重试 {retry+1}/1)", "red")
+                    await asyncio.sleep(1)
 
             if not plan or (not plan.steps and not plan.notes):
                 self._log("  LLM 多次失败，等待后跳过此轮", "red")
                 self._llm_failures += 1
-                if self._llm_failures >= 5:
+                if self._llm_failures >= 3:
                     self._log(f"LLM 连续失败 {self._llm_failures} 次，终止", "red")
                     raise HumanReviewRequired(f"LLM 连续失败 {self._llm_failures} 次，API 可能有问题")
-                await asyncio.sleep(3)
+                await asyncio.sleep(2)
                 continue
 
             self._llm_failures = 0  # reset on success
@@ -282,10 +282,10 @@ class ComputerAgent:
 
         full_prompt = _SYSTEM_PROMPT + "\n\n" + "\n".join(prompt_parts)
 
-        # Timeout-protected LLM call
+        # Timeout-protected LLM call (30s — normal calls complete in ~8s)
         raw = await asyncio.wait_for(
             vision_chat(text_prompt=full_prompt, image_path=obs.screenshot_path, max_tokens=1024),
-            timeout=120,
+            timeout=30,
         )
 
         try:
