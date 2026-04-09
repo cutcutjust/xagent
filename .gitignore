@@ -1,0 +1,23 @@
+# Secrets
+.env
+
+# Virtual environment
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+
+# Runtime data
+data/
+screenshots/
+drafts/
+cache/
+runs/
+
+# macOS
+.DS_Store

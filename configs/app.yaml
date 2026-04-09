@@ -1,0 +1,25 @@
+app:
+  name: SightOps
+  version: "0.1.0"
+  data_dir: "./data"
+
+research:
+  max_items_per_run: 60
+  relevance_threshold: 3.0       # 1-5 score, skip below this
+  comment_limit: 25              # replies to collect per post (scrolls to load more)
+  topics_per_run: 10             # how many topics to search per run
+  posts_per_topic: 30            # candidate links to pull per topic search
+  schedule_hours: [8, 12]        # daily research triggers
+
+analysis:
+  lookback_days: 7
+  min_items_for_analysis: 5
+
+writing:
+  top_k_sources: 5               # how many research items feed one draft
+  platforms_default: ["x"]
+
+publishing:
+  human_review_required: true    # always pause for review before publish
+  publish_hour: 20               # golden hour 8pm
+  post_delay_seconds: 3          # between actions on page

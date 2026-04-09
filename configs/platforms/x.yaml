@@ -1,0 +1,39 @@
+platform: x
+display_name: "X (Twitter)"
+base_url: "https://x.com"
+search_url: "https://x.com/search?q={query}&f=top"
+
+content_rules:
+  short_post:
+    max_chars: 280
+    image_max: 4
+    supports_links: true
+    supports_hashtags: true
+
+  thread:
+    post_max_chars: 280
+    max_posts: 25
+    supports_links: true
+    supports_code: false
+
+  article:
+    min_words: 800
+    max_words: 10000
+    supports_markdown: true
+    supports_images: true
+    image_max: 20
+    supports_links: true
+    supports_code: true
+    supports_embeds: true
+    requires_premium: true
+
+publish:
+  article_url: "https://x.com/compose/article"
+  post_url: "https://x.com/compose/post"
+  method: "web"          # web | api
+
+style_guide:
+  tone: "insightful, direct, slightly opinionated"
+  emoji_usage: "moderate"
+  cta_style: "question or call to discuss"
+  opening: "hook_first"  # lead with the most interesting claim
