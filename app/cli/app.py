@@ -112,7 +112,7 @@ def main(ctx: typer.Context):
     if choice == 1:
         topics_str = typer.prompt("输入主题或概念", default="")
         topics = topics_str.split() if topics_str else []
-        asyncio.run(_research_async(topics or [], 50, 10))
+        asyncio.run(_research_async(topics or [], 50, 10, "api", 3, 40))
     elif choice == 2:
         days = typer.prompt("分析最近几天", type=int, default=7)
         asyncio.run(_analyze_async(days, "x"))
@@ -131,12 +131,33 @@ def main(ctx: typer.Context):
 
 # ── 需求轮询 ──────────────────────────────────────────────────────────
 
-async def _clarify_topics(topics: list[str]) -> list[str]:
-    """对模糊/单一关键词做方向拆解，让用户确认后返回具体搜索词。"""
-    if not topics or len(topics) > 3 or all(len(t) > 20 for t in topics):
-        return topics
+async def _clarify_topics(topics: list[str]) -> dict:
+    """对模糊/单一关键词做方向拆解，用户确认后返回调研上下文。
 
-    keyword = " ".join(topics)
+    Returns:
+        {
+            "query": "原始关键词",
+            "directions": [
+                {"name": "...", "description": "...", "keywords": [...]},
+                ...
+            ],
+            "search_keywords": ["kw1", "kw2", ...],  # 用于 API 搜索
+            "relevance_prompt": "...",               # 用于相关性打分的完整描述
+        }
+    """
+    keyword = " ".join(topics) if topics else ""
+
+    # 关键词已经足够具体（>3个 或 每个都长），直接用
+    if topics and (len(topics) > 3 or all(len(t) > 20 for t in topics)):
+        return _build_context(keyword, [{"name": keyword, "description": keyword, "keywords": topics}])
+
+    if not keyword:
+        topic_cfg = load_yaml("configs/topics.yaml")
+        default_kws = topic_cfg.get("keywords", [])
+        if default_kws:
+            return _build_context("默认主题", [{"name": "默认", "description": "使用配置文件关键词", "keywords": default_kws}])
+        return _build_context("", [])
+
     console.print(f"\n    [{BRAND}]▶[/] 分析「{keyword}」的调研方向...")
 
     from app.llm.client import chat
@@ -147,7 +168,7 @@ async def _clarify_topics(topics: list[str]) -> list[str]:
         "每个方向需包含：\n"
         '  - id: 序号\n'
         '  - name: 方向名称（简短）\n'
-        '  - description: 一句话说明\n'
+        '  - description: 一句话说明这个方向关注什么、为什么有价值\n'
         '  - keywords: 2-3 个搜索关键词（英文，适合 X 搜索）\n'
         '返回 JSON 数组，只返回 JSON。'
     )
@@ -162,7 +183,7 @@ async def _clarify_topics(topics: list[str]) -> list[str]:
             raise ValueError("空结果")
     except Exception:
         console.print(f"    [dim]无法拆解方向，直接搜索[/dim]")
-        return topics
+        return _build_context(keyword, [{"name": keyword, "description": keyword, "keywords": topics or [keyword]}])
 
     # 显示方向
     console.print(f"\n    「{keyword}」可拆解为以下方向：\n")
@@ -178,20 +199,42 @@ async def _clarify_topics(topics: list[str]) -> list[str]:
     console.print("")
 
     choice = typer.prompt("选择方向（多选用逗号，0=全部）", default="0")
-    selected = []
+    selected_directions = []
     if choice.strip() == "0":
-        for d in directions:
-            selected.extend(d.get("keywords", []))
+        selected_directions = directions
     else:
         try:
             indices = [int(x.strip()) for x in choice.split(",") if x.strip()]
             for idx in indices:
                 if 1 <= idx <= len(directions):
-                    selected.extend(directions[idx - 1].get("keywords", []))
+                    selected_directions.append(directions[idx - 1])
         except (ValueError, IndexError):
-            selected = topics
+            selected_directions = [{"name": keyword, "description": keyword, "keywords": topics or [keyword]}]
 
-    return selected if selected else topics
+    if not selected_directions:
+        selected_directions = [{"name": keyword, "description": keyword, "keywords": topics or [keyword]}]
+
+    return _build_context(keyword, selected_directions)
+
+
+def _build_context(query: str, directions: list[dict]) -> dict:
+    """从用户选择的方向构建调研上下文。"""
+    search_keywords = []
+    for d in directions:
+        search_keywords.extend(d.get("keywords", []))
+
+    # 构建用于相关性打分的完整描述
+    dir_parts = []
+    for d in directions:
+        dir_parts.append(f"- {d.get('name', '')}: {d.get('description', '')}")
+    relevance_prompt = f"用户调研主题「{query}」，关注以下方向：\n" + "\n".join(dir_parts) if dir_parts else query
+
+    return {
+        "query": query,
+        "directions": directions,
+        "search_keywords": search_keywords,
+        "relevance_prompt": relevance_prompt,
+    }
 
 
 # ── setup ──────────────────────────────────────────────────────────────
@@ -283,19 +326,20 @@ def observe(
 @cli.command()
 def research(
     topics: list[str] = typer.Argument(None, help="搜索主题（默认用 topics.yaml）"),
-    limit: int = typer.Option(50, "--limit", "-n", help="目标采集帖子数（默认50）"),
+    limit: int = typer.Option(50, "--limit", "-n", help="每轮搜索目标帖子数（默认50）"),
     min_comments: int = typer.Option(10, "--min-comments", "-c", help="每个帖子最少评论数（默认10）"),
     mode: str = typer.Option("api", "--mode", "-m", help="调研模式: api | visual"),
     deep_read: int = typer.Option(3, "--deep-read", "-d", help="API 调研后视觉精读 Top N 帖子（0=关闭）"),
+    min_refs: int = typer.Option(40, "--min-refs", "-r", help="最少有效引用数（默认40）"),
 ):
-    """X 调研 — 轮询方向 → API 搜索 → 视觉精读 → 保存。"""
+    """X 调研 — 轮询方向 → API 搜索 → 循环补采 → 视觉精读 → 保存。"""
     if mode not in ("api", "visual"):
         console.print(f"[{WARN}]无效模式 '{mode}'，请使用 api 或 visual[/]")
         raise typer.Exit(1)
-    asyncio.run(_research_async(topics or [], limit, min_comments, mode, deep_read))
+    asyncio.run(_research_async(topics or [], limit, min_comments, mode, deep_read, min_refs))
 
 
-async def _research_async(topics: list[str], limit: int, min_comments: int, mode: str = "api", deep_read: int = 3):
+async def _research_async(topics: list[str], limit: int, min_comments: int, mode: str = "api", deep_read: int = 3, min_refs: int = 40):
     from app.memory.sqlite_repo import count_references
 
     init_db()
@@ -305,29 +349,34 @@ async def _research_async(topics: list[str], limit: int, min_comments: int, mode
     if not topics:
         topics = topic_cfg.get("keywords", [])
 
-    # 对模糊关键词做方向拆解
-    topics = await _clarify_topics(topics)
+    # 对模糊关键词做方向拆解，返回调研上下文
+    ctx = await _clarify_topics(topics)
+    search_keywords = ctx["search_keywords"]
+    research_context = ctx["relevance_prompt"]
 
     if mode == "visual":
         from app.desktop.permissions import check_all_permissions
         check_all_permissions()
 
     mode_label = "纯 API" if mode == "api" else "视觉 + API"
-    _banner("XAgent 调研启动", f"{mode_label} · 综合评分 · 目标 {limit} 帖")
+    _banner("XAgent 调研启动", f"{mode_label} · 综合评分 · 目标 {min_refs} 个有效引用")
 
     # Show plan
     plan = Table.grid(padding=(0, 1))
     plan.add_column("步骤", style=BRAND)
     plan.add_column("内容")
+    plan.add_row("0", f"调研方向: {ctx['query']}")
+    for i, d in enumerate(ctx.get("directions", [])[:5], 1):
+        plan.add_row("", f"  {d.get('name', '')}: {d.get('description', '')}")
     if mode == "api":
-        plan.add_row("1", f"X API 搜索 {len(topics)} 个主题: {', '.join(topics[:5])}{'...' if len(topics) > 5 else ''}")
-        plan.add_row("2", f"逐帖采集 → API 正文/评论({min_comments}+) → LLM 打分")
-        plan.add_row("3", "综合评分（相关性×0.3 + 互动×0.4 + 时效×0.3）→ 筛选保存")
+        plan.add_row("1", f"X API 搜索 {len(search_keywords)} 个关键词: {', '.join(search_keywords[:5])}{'...' if len(search_keywords) > 5 else ''}")
+        plan.add_row("2", f"逐帖采集 → API 正文/评论({min_comments}+) → 按调研方向 LLM 打分")
+        plan.add_row("3", f"综合评分筛选 → 不足 {min_refs} 条时扩展搜索词继续补采")
         if deep_read > 0:
             plan.add_row("4", f"视觉精读 Top {deep_read} 高权重帖子（图片/视频/完整正文）")
     else:
         plan.add_row("1", "打开 Safari → 导航到 x.com")
-        plan.add_row("2", f"X API 搜索 {len(topics)} 个主题，按互动量排序")
+        plan.add_row("2", f"X API 搜索 {len(search_keywords)} 个关键词，按互动量排序")
         plan.add_row("3", f"逐个点开高热度帖子 → 正文/图片/API 评论({min_comments}+) → 权重打分")
     console.print(Panel(plan, title="[bold]执行计划[/bold]", border_style=BRAND))
     console.print("")
@@ -341,7 +390,13 @@ async def _research_async(topics: list[str], limit: int, min_comments: int, mode
         researcher = DesktopXResearcher()
 
     console.print(f"[{BRAND}]▸ 开始 API 搜索 X 内容...[/]")
-    posts = await researcher.discover(topics or None, target_posts=limit, min_comments=min_comments)
+    posts = await researcher.discover(
+        search_keywords or None,
+        target_posts=limit,
+        min_comments=min_comments,
+        research_context=research_context,
+        min_valid_refs=min_refs,
+    )
     if not posts:
         console.print(f"\n[{WARN}]未发现相关帖子[/]")
         _next_steps(
@@ -435,7 +490,7 @@ async def _research_async(topics: list[str], limit: int, min_comments: int, mode
 
 async def _full_flow_async(topics: list[str]):
     """调研 → 报告 → 分析 → 写作 全流程。"""
-    await _research_async(topics, 30, 10)
+    await _research_async(topics, 50, 10, "api", 3, 40)
 
     topic = topics[0] if topics else ""
 

@@ -546,8 +546,8 @@ class DesktopXResearcher:
 
     # ── LLM 辅助（委托给模块级函数）───────────────────────────────────
 
-    async def _score_relevance(self, c: CollectedContent) -> float:
-        return await score_relevance(c)
+    async def _score_relevance(self, c: CollectedContent, research_context: str = "") -> float:
+        return await score_relevance(c, research_context)
 
     async def _summarize(self, c: CollectedContent) -> str:
         return await summarize_content(c)
@@ -561,9 +561,17 @@ class DesktopXResearcher:
 
 # ── 公共 LLM 辅助函数（供 APIXResearcher 复用）────────────────────
 
-async def score_relevance(c: CollectedContent) -> float:
+async def score_relevance(c: CollectedContent, research_context: str = "") -> float:
+    """根据用户确认的调研方向对帖子做相关性打分。"""
+    context_part = ""
+    if research_context:
+        context_part = f"用户的具体调研方向：\n{research_context}\n\n"
     prompt = (
-        "对这条帖子与 AI/创业/科技/内容创作的相关性打 1-5 分。\n"
+        f"{context_part}"
+        "对这条帖子与上述调研方向的相关性打 1-5 分。\n"
+        "5=高度相关（直接讨论该方向的核心理念/产品/趋势），\n"
+        "3=间接相关（涉及相关领域但未直击要点），\n"
+        "1=不相关。\n\n"
         f"@{c.author} ({c.metrics.likes} 赞):\n{c.body_text[:600]}\n\n"
         '只返回 JSON: {"score": 1-5, "reason": "简短原因"}'
     )
