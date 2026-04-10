@@ -4,7 +4,7 @@
 
 **核心能力**：模型看截图 → 分析当前状态 → 决定下一步 → 执行键鼠 → 截图验证 → 循环。无硬编码导航序列，无 API 依赖，纯视觉闭环。
 
-**技术栈**：Qwen3.6-Plus（视觉）· PyAutoGUI（全局控制）· Notion API · SQLite · Rich CLI
+**技术栈**：Qwen3.6-Plus（视觉）· X API v2（搜索发现）· PyAutoGUI（全局控制）· Notion API · SQLite · Rich CLI
 
 ---
 
@@ -68,9 +68,11 @@ sightops research
 **深度调研流程**：
 
 ```
-打开 Safari → x.com → 搜索关键词
+打开 Safari → x.com
   ↓
-滚动识别当前屏幕帖子
+X API 搜索关键词 → 按热度排序 (likes/reposts/replies/views)
+  ↓
+用 URL 直接导航到高热度帖子
   ↓
 逐一点开 → 聚焦浏览器 → 提取正文/指标
   ↓
@@ -78,9 +80,9 @@ sightops research
   ↓
 相关性打分 → 摘要 + 标签 → 保存 SQLite
   ↓
-同步 Notion → 返回搜索结果
+同步 Notion → 下一个帖子
   ↓
-继续滚动 → 下一个帖子
+API 搜索下一个主题
 ```
 
 每个帖子完整采集：
@@ -149,6 +151,12 @@ NOTION_RESEARCH_DB_ID=xxx
 NOTION_TEMPLATE_DB_ID=xxx
 NOTION_DRAFT_DB_ID=xxx
 
+# ── X API（可选，搜索发现更快更准）─
+X_API_CONSUMER_KEY=xxx
+X_API_CONSUMER_SECRET=xxx
+X_API_ACCESS_TOKEN=xxx
+X_API_ACCESS_TOKEN_SECRET=xxx
+
 # ── 其他 ─
 LOG_LEVEL=INFO
 DATA_DIR=./data
@@ -197,13 +205,15 @@ writing:
 ```
 每次循环:
   1. SEE:   全屏截图 (macOS screencapture)
-  2. THINK: LLM 分析截图 + 历史上下文 → 输出 JSON 动作计划
+  2. THINK: LLM 分析截图 + 历史上下文 + 全局计划 → 输出 JSON 动作计划
   3. ACT:   PyAutoGUI 执行动作（move/click/type/hotkey/scroll）
   4. VERIFY: 下一次循环的截图天然构成验证
   5. 循环直到任务完成 / 卡住 / 达到最大循环数
 ```
 
 - observe + decide 合并为一次 LLM 调用
+- **计划上下文注入**：每次调用传入 `plan_context`（整体目标/当前步骤/下一步），LLM 在 prompt 中看到 `OVERALL PLAN`（✓已完成 → 当前 → 下一步）
+- **重复 done 检测**：连续 2 次报告"完成"但无实际动作 → 主动退出
 - 对话历史上下文，模型能看到页面变化
 - 卡住检测：连续 8 次相同动作 → 终止
 - LLM 输出归一化：坐标提取、文本提取、快捷键映射
@@ -218,15 +228,19 @@ writing:
 
 ```
 DesktopXResearcher
-  ├── discover()      搜索 X + 逐帖深度采集（边发现边采集）
-  │     ├── _focus_browser()     确保浏览器窗口聚焦
-  │     ├── _copy_post_url()     分享按钮 → Copy Link
-  │     ├── _extract_post_content()  视觉提取正文/指标
-  │     ├── _analyze_images()    点击打开图片 → 视觉分析
-  │     ├── _read_comments()     3 轮滚动 → 提取评论
-  │     ├── _find_metrics()      滚动查找隐藏指标
-  │     └── _sync_to_notion()    同步到 Notion
-  └── _go_back()       返回搜索结果
+  ├── discover()      API 搜索 + 按热度排序 + 视觉深度采集
+  │     ├── X API v2 搜索关键词，分页获取
+  │     ├── sort_by_engagement() 按互动量排序
+  │     ├── _deep_collect_api_tweets()  用 URL 直接导航到帖子
+  │     │     ├── _focus_browser()      确保浏览器窗口聚焦
+  │     │     ├── _extract_post_content()  视觉提取正文/指标
+  │     │     ├── _copy_post_url()      分享按钮 → Copy Link
+  │     │     ├── _analyze_images()     点击打开图片 → 视觉分析
+  │     │     ├── _read_comments()      3 轮滚动 → 提取评论
+  │     │     ├── _find_metrics()       滚动查找隐藏指标
+  │     │     └── _sync_to_notion()     同步到 Notion
+  │     └── 回退方案：API 失败时 → 视觉搜索
+  └── _go_back()       返回上一页
 ```
 
 ### 数据流
