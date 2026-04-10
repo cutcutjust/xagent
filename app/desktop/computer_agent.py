@@ -205,18 +205,32 @@ class ComputerAgent:
         task: str,
         *,
         context: dict | None = None,
+        plan_context: dict | None = None,
     ) -> ExecutionResult:
         """
         Main entry point. Runs the full see-think-act-verify loop.
+
+        Args:
+            task: The current micro-task description.
+            context: Additional context for the LLM (key-value pairs).
+            plan_context: Overall research plan awareness. Structure:
+                - overall_goal: The end goal of this research session
+                - current_step: Which step we're on (e.g., "Step 2/5: Search mythos")
+                - completed_steps: List of completed step descriptions
+                - next_steps: List of upcoming steps
         """
         logger.info(f"[ComputerAgent] Starting task: {task}")
         self._log(f"[Agent] 任务: {task}", "dim")
+        if plan_context:
+            self._log(f"[Agent] 计划: {plan_context.get('overall_goal', '')}", "dim")
+            self._log(f"[Agent] 当前: {plan_context.get('current_step', '')}", "dim")
 
         # Reset per-task state (agent is reused across collect calls)
         self._history = []
         self._conversation_history = []
         self._last_actions = []
         self._llm_failures = 0
+        self._done_loop_count = 0  # Track consecutive "done without action" cycles
 
         for cycle in range(1, self.max_cycles + 1):
             # Check stop event
@@ -241,7 +255,7 @@ class ComputerAgent:
             max_retries = 2
             for retry in range(max_retries):
                 try:
-                    plan = await self._observe_and_decide(obs, task, context)
+                    plan = await self._observe_and_decide(obs, task, context, plan_context)
                     if plan and plan.steps:
                         break
                     if plan and plan.confidence == 0.0:
@@ -286,9 +300,20 @@ class ComputerAgent:
                 )
 
             if not plan.steps:
+                # Detect "done" loop: LLM keeps saying "task completed" without actual actions
+                notes_lower = plan.notes.lower()
+                if any(kw in notes_lower for kw in ["done", "completed", "success", "完成", "成功"]):
+                    self._done_loop_count += 1
+                    if self._done_loop_count >= 2:
+                        self._log(f"  LLM 连续 {self._done_loop_count} 次报告完成但无动作，主动退出", "yellow")
+                        return ExecutionResult(status="done", actions=self._actions_executed, notes=plan.notes)
+                    self._log(f"  无动作计划但报告完成 (计数 {self._done_loop_count}/2)，再等一回合", "yellow")
+                    await asyncio.sleep(2)
+                    continue
+                else:
+                    self._done_loop_count = 0  # reset if LLM is actually doing something
+
                 self._log("  无动作计划，滚动尝试", "yellow")
-                if "done" in plan.notes.lower() or "完成" in plan.notes.lower():
-                    return ExecutionResult(status="done", actions=self._actions_executed, notes=plan.notes)
                 plan.steps = [PlannedAction(
                     action=ActionType.SCROLL, direction="down", amount=10,
                     reason="No action planned, scrolling to explore",
@@ -332,6 +357,7 @@ class ComputerAgent:
         obs,
         task: str,
         context: dict | None = None,
+        plan_context: dict | None = None,
     ) -> ActionPlan:
         """Single LLM call with timeout: observe page state + decide next actions.
 
@@ -347,6 +373,18 @@ class ComputerAgent:
             prompt_parts.append("CONTEXT: " + " | ".join(parts))
         if self._history:
             prompt_parts.append(f"EXECUTION HISTORY: {' | '.join(self._history[-5:])}")
+        if plan_context:
+            goal = plan_context.get("overall_goal", "")
+            current = plan_context.get("current_step", "")
+            completed = plan_context.get("completed_steps", [])
+            next_steps = plan_context.get("next_steps", [])
+            plan_lines = ["", "OVERALL PLAN:"]
+            for s in completed:
+                plan_lines.append(f"  ✓ {s}")
+            plan_lines.append(f"→ {current} (CURRENT)")
+            for s in next_steps:
+                plan_lines.append(f"  → {s}")
+            prompt_parts.append("\n".join(plan_lines))
         prompt_parts.append("\nLook at the screenshot. Analyze the current state and decide the next 1-3 steps.")
 
         full_prompt = "\n".join(prompt_parts)

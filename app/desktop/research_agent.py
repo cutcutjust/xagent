@@ -43,8 +43,18 @@ class DesktopXResearcher:
         console.print("[cyan]打开浏览器，导航到 x.com...[/cyan]")
         try:
             await self.agent.run(
-                "Open a browser and navigate to x.com. Use Cmd+Space and type Safari to open the browser, then type x.com in the address bar. If you see a login wall, stop and let the human log in.",
+                "Focus Safari with Cmd+Tab. If Safari isn't visible, use Cmd+Space to open it. Then Cmd+L to focus address bar, type x.com, press Enter.",
                 context={"target_url": "x.com", "browser": "Safari"},
+                plan_context={
+                    "overall_goal": f"调研 {len(topics)} 个主题的相关帖子",
+                    "current_step": "Step 1/4: 打开浏览器导航到 x.com",
+                    "completed_steps": [],
+                    "next_steps": [
+                        f"Step 2: 搜索主题 ({', '.join(topics[:3])}{'...' if len(topics) > 3 else ''})",
+                        "Step 3: 逐一点开帖子 → 正文/图片/评论/指标",
+                        "Step 4: Notion 同步保存",
+                    ],
+                },
             )
         except Exception as e:
             console.print(f"[yellow]导航到 X 时遇到问题: {e}[/yellow]")
@@ -57,8 +67,17 @@ class DesktopXResearcher:
             # 用 ComputerAgent 执行搜索
             try:
                 await self.agent.run(
-                    f"On X (Twitter), find the search box, type '{topic}', press Enter, and wait for search results to load. Search for the exact keyword '{topic}' — do NOT use 'from:' prefix, just type the keyword directly.",
+                    f"On X (Twitter), find the search box, type '{topic}', press Enter, and wait for search results to load.",
                     context={"search_query": topic},
+                    plan_context={
+                        "overall_goal": f"调研 {len(topics)} 个主题的相关帖子",
+                        "current_step": f"Step 2/4: 搜索 '{topic}'",
+                        "completed_steps": ["Step 1: 打开浏览器导航到 x.com ✓"],
+                        "next_steps": [
+                            f"Step 3: 搜索 '{topic}' 的结果中逐一点开帖子深度采集",
+                            "Step 4: Notion 同步保存",
+                        ],
+                    },
                 )
             except Exception as e:
                 console.print(f"    [yellow]搜索失败: {e}[/yellow]")
@@ -205,8 +224,20 @@ class DesktopXResearcher:
         # Step 2: 点击帖子
         try:
             await self.agent.run(
-                f"Click on the visible post by @{author} to open its detail page. Look for the author name and post text that match.",
+                f"Click on the visible post by @{author} to open its detail page.",
                 context={"target_author": author, "text_preview": preview[:40]},
+                plan_context={
+                    "overall_goal": "深度采集帖子内容",
+                    "current_step": f"点开 @{author} 的帖子",
+                    "completed_steps": ["聚焦浏览器窗口 ✓"],
+                    "next_steps": [
+                        "提取帖子正文和指标",
+                        "复制帖子链接",
+                        "分析图片（如有）",
+                        "读取评论",
+                        "相关性打分 → 保存 → Notion 同步",
+                    ],
+                },
             )
         except Exception:
             console.print(f"    [yellow]点击 @{author} 帖子失败[/yellow]")
@@ -220,7 +251,16 @@ class DesktopXResearcher:
         if not post_data:
             console.print(f"    [yellow]无法提取 @{author} 内容，滚动再试[/yellow]")
             try:
-                await self.agent.run("Scroll down slightly to see more of the post content.", max_cycles=2)
+                await self.agent.run(
+                    "Scroll down slightly to see more of the post content.",
+                    max_cycles=2,
+                    plan_context={
+                        "overall_goal": "深度采集帖子内容",
+                        "current_step": "滚动查找帖子正文",
+                        "completed_steps": ["聚焦浏览器 ✓", "点击帖子 ✓"],
+                        "next_steps": ["提取帖子内容", "复制链接", "分析图片", "读取评论", "保存"],
+                    },
+                )
             except Exception:
                 pass
             await asyncio.sleep(1)
@@ -326,6 +366,17 @@ class DesktopXResearcher:
             await self.agent.run(
                 f"On the X search results page, find and click the post by @{author} to open its detail page.",
                 context={"target_author": author},
+                plan_context={
+                    "overall_goal": f"调研 {topic} 相关帖子",
+                    "current_step": f"点开 @{author} 的帖子深度采集",
+                    "completed_steps": ["导航到 X ✓", "搜索 ✓", "滚动识别帖子 ✓"],
+                    "next_steps": [
+                        "提取帖子正文和指标",
+                        "分析图片（如有）",
+                        "读取评论",
+                        "相关性打分 → 保存 → Notion 同步",
+                    ],
+                },
             )
         except Exception:
             console.print(f"    [yellow]定位帖子失败，跳过[/yellow]")
@@ -340,7 +391,16 @@ class DesktopXResearcher:
             console.print(f"    [yellow]无法提取帖子内容，滚动再试[/yellow]")
             # 帖子可能不在屏幕中间，先滚动
             try:
-                await self.agent.run("Scroll down slightly to center the post content.", max_cycles=2)
+                await self.agent.run(
+                    "Scroll down slightly to center the post content.",
+                    max_cycles=2,
+                    plan_context={
+                        "overall_goal": "深度采集帖子内容",
+                        "current_step": "滚动查找帖子正文",
+                        "completed_steps": ["点击帖子 ✓"],
+                        "next_steps": ["提取帖子内容", "分析图片", "读取评论", "保存"],
+                    },
+                )
             except Exception:
                 pass
             await asyncio.sleep(1)
@@ -565,6 +625,12 @@ class DesktopXResearcher:
             await self.agent.run(
                 "Scroll down to see the comments/replies section of this post.",
                 max_cycles=3,
+                plan_context={
+                    "overall_goal": "深度采集帖子内容",
+                    "current_step": "读取评论区",
+                    "completed_steps": ["提取帖子正文 ✓", "复制链接 ✓"],
+                    "next_steps": ["提取评论", "相关性打分", "保存 → Notion 同步"],
+                },
             )
         except Exception:
             pass
