@@ -147,7 +147,7 @@ class APIXResearcher:
                     await asyncio.sleep(random.uniform(2, 4))
 
                 except Exception as e:
-                    console.print(f"    [{C_WARN}]search failed: {e}[/{C_WARN}]")
+                    console.print(Text(f"    search failed: {e}", style=C_WARN))
                     continue
 
             if not round_contents:
@@ -180,13 +180,13 @@ class APIXResearcher:
                 save_content(content)
                 md_path = save_content_to_md(content)
 
-                score_style = C_ACCENT if content.final_score >= 3.5 else ""
-                console.print(
-                    f"  [{C_ACCENT}]saved[/{C_ACCENT}] "
-                    f"@{content.author}  "
-                    f"[{score_style}]{content.final_score:.1f}[/{score_style}]  "
-                    f"[{C_DIM}]{content.body_text[:80]}[/{C_DIM}]"
-                )
+                score_style = C_ACCENT if content.final_score >= 3.5 else "bold"
+                saved_line = Text()
+                saved_line.append("  saved ", style=C_ACCENT)
+                saved_line.append(f"@{content.author}  ", style="")
+                saved_line.append(f"{content.final_score:.1f}  ", style=score_style)
+                saved_line.append(content.body_text[:80], style="dim")
+                console.print(saved_line)
 
                 save_reference(
                     content.source_url, "x",
