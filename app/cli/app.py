@@ -28,7 +28,7 @@ from app.core.config import get_settings, load_yaml
 from app.memory.sqlite_repo import (
     init_db,
     load_pending_platform_drafts,
-    load_recent_content,
+    load_collected_content,
     load_tasks,
     save_platform_draft,
     save_universal_draft,
@@ -288,7 +288,7 @@ async def _analyze_async(days: int, platform: str):
     from app.analysis.style_miner import mine_style
 
     init_db()
-    items = load_recent_content(platform=platform, days=days)
+    items = load_collected_content(platform=platform, days=days)
     if not items:
         console.print(f"[{WARN}]最近 {days} 天没有 {platform.upper()} 内容。先运行 research[/]")
         return
@@ -353,7 +353,7 @@ async def _write_async(topic: str, post_type: str, days: int, platform: str):
     from app.writing.drafter import create_draft
 
     init_db()
-    sources = load_recent_content(platform=platform, days=days)
+    sources = load_collected_content(platform=platform, days=days)
     if not sources:
         console.print(f"[{WARN}]没有调研内容。先运行 [bold]xagent research[/bold][/]")
         return
@@ -478,7 +478,7 @@ def status():
     total_refs, collected_refs = count_references("x")
     tasks = load_tasks()[:10]
     drafts = load_pending_platform_drafts()
-    sources = load_recent_content(platform="x", days=30)
+    sources = load_collected_content(platform="x", days=30)
 
     _banner("数据总览", "XAgent")
 

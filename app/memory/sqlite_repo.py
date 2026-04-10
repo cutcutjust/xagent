@@ -227,19 +227,6 @@ def save_content_to_md(c: CollectedContent) -> str:
     return str(filepath)
 
 
-def load_content(platform: str = "x", days: int = 7) -> list[CollectedContent]:
-    """Alias for load_recent_content for backward compat."""
-    return load_recent_content(platform=platform, days=days)
-    from datetime import timedelta
-    cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
-    with _conn() as db:
-        rows = db.execute(
-            "SELECT * FROM collected_content WHERE platform=? AND collected_at>=? "
-            "ORDER BY relevance_score DESC",
-            (platform, cutoff),
-        ).fetchall()
-    return [_row_to_content(r) for r in rows]
-
 
 def _row_to_content(r: sqlite3.Row) -> CollectedContent:
     from app.schemas.content import Comment, Metrics
