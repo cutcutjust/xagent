@@ -38,7 +38,7 @@ from app.memory.sqlite_repo import (
 
 cli = typer.Typer(
     name="xagent",
-    help="XAgent — X 平台 AI 调研与操作 Agent",
+    help="XAgent — 全屏视觉 AI 调研 Agent",
     rich_markup_mode="rich",
     add_completion=False,
     invoke_without_command=True,
@@ -90,11 +90,11 @@ def _next_steps(*steps: str) -> None:
 
 @cli.callback(invoke_without_command=True)
 def main(ctx: typer.Context):
-    """XAgent — X 平台 AI 调研与操作 Agent。"""
+    """XAgent — 全屏视觉 AI 调研 Agent。"""
     if ctx.invoked_subcommand is not None:
         return
 
-    _banner("XAgent", "X 平台 AI 调研与操作 Agent")
+    _banner("XAgent", "全屏视觉 AI 调研 Agent")
     menu = Table.grid(padding=(0, 2))
     menu.add_column("序号", style=BRAND, width=4)
     menu.add_column("功能")
@@ -242,7 +242,7 @@ def _build_context(query: str, directions: list[dict]) -> dict:
 @cli.command()
 def setup():
     """初始化项目 — 首次使用运行此命令。"""
-    _banner("XAgent 初始化", "X 平台视觉 AI 调研 Agent v0.1.0")
+    _banner("XAgent Setup", "全屏视觉 AI 调研 Agent v0.1.0")
 
     s = get_settings()
 
@@ -443,35 +443,48 @@ async def _research_async(topics: list[str], limit: int, min_comments: int, mode
 
     _rule()
 
-    # 统计面板
-    stats = Table.grid(padding=(0, 2))
-    stats.add_column("指标", style=BRAND)
-    stats.add_column("值", style="bold")
-    stats.add_row("采集保存", f"{len(posts)} 条")
-    stats.add_row("平均综合分", f"{avg_final:.1f}")
-    stats.add_row("平均相关性", f"{avg_relevance:.1f}")
-    stats.add_row("总互动", f"❤{total_likes:,} 🔁{total_reposts:,} 💬{total_comments:,} 👁{total_views:,}")
-    stats.add_row("历史采集", f"共 {total_refs} 条，已深度 {collected_refs} 条")
-    console.print(Panel(stats, title="[bold green]调研完成[/bold green]", border_style="green"))
+    # 统计面板 — 紧凑两列
+    stats = Table.grid(padding=(0, 3))
+    stats.add_column("key", style="dim", width=10)
+    stats.add_column("val", style="bold")
+    stats.add_column("key2", style="dim", width=10)
+    stats.add_column("val2", style="bold")
+    stats.add_row(
+        "saved", f"{len(posts)}",
+        "avg score", f"{avg_final:.1f}",
+    )
+    stats.add_row(
+        "relevance", f"{avg_relevance:.1f}",
+        "history", f"{total_refs} total / {collected_refs} deep",
+    )
+    stats.add_row(
+        "likes", f"{total_likes:,}",
+        "views", f"{total_views:,}",
+    )
+    stats.add_row(
+        "reposts", f"{total_reposts:,}",
+        "comments", f"{total_comments:,}",
+    )
+    console.print(Panel(stats, title="[bold green]Research Complete[/bold green]", border_style="green"))
 
-    # Top 帖子
+    # Top 帖子 — 紧凑表
     if posts:
-        top_table = Table(title="Top 帖子", border_style=BRAND, show_lines=True)
+        top_table = Table(border_style=BRAND, show_lines=False, pad_edge=False)
         top_table.add_column("#", width=3, style=BRAND)
-        top_table.add_column("作者", width=16)
-        top_table.add_column("内容", min_width=35, no_wrap=False)
-        top_table.add_column("❤", justify="right", width=6)
-        top_table.add_column("👁", justify="right", width=6)
-        top_table.add_column("相关性", justify="right", width=5)
-        top_table.add_column("综合分", justify="right", width=5, style=ACCENT)
+        top_table.add_column("author", width=16)
+        top_table.add_column("text", min_width=40, no_wrap=False, style="dim")
+        top_table.add_column("likes", justify="right", width=6)
+        top_table.add_column("views", justify="right", width=7)
+        top_table.add_column("rel", justify="right", width=4)
+        top_table.add_column("score", justify="right", width=5, style=ACCENT)
         for i, p in enumerate(sorted(posts, key=lambda x: x.get("final_score", 0), reverse=True)[:10], 1):
             top_table.add_row(
                 str(i),
                 f"@{p.get('author', '')[:15]}",
-                p.get("text_preview", "")[:50],
+                p.get("text_preview", "")[:55],
                 str(p.get("likes", 0)),
                 str(p.get("views", 0)),
-                f"{p.get('relevance_score', 0):.1f}",
+                f"{p.get('relevance_score', 0):.0f}",
                 f"{p.get('final_score', 0):.1f}",
             )
         console.print(top_table)

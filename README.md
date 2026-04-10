@@ -2,9 +2,9 @@
 
 # XAgent
 
-**X 平台 AI 调研与操作 Agent**
+**全屏视觉 AI 调研 Agent — 像真人一样操作电脑**
 
-纯 API 快速调研 · 综合评分筛选 · 需求轮询 · 视觉精读 · 发推互动
+需求轮询 · 方向驱动打分 · 循环补采至40+引用 · 视觉精读 · 发推互动
 
 ---
 
@@ -16,13 +16,13 @@
 
 ## 特性
 
-- **需求轮询** — 模糊关键词自动拆解方向，确认后再调研
-- **综合评分** — 相关性(30%) + 互动热度(40%) + 时效性(30%)，不再仅靠 LLM 打分
+- **需求轮询** — 模糊关键词自动拆解方向，用户确认后再搜索
+- **方向驱动打分** — LLM 按用户确认的调研方向评分，不是通用标准
+- **循环补采** — 低权重舍弃，不足40个有效引用时自动扩展搜索词继续补采
+- **综合评分** — 相关性(30%) + 互动热度(40%) + 时效性(30%)
 - **纯 API 调研** — 无需浏览器/桌面权限，Bearer Token 直连 X API
 - **视觉精读** — API 调研后用 `--deep-read` 精读高权重帖子，提取图片/视频
-- **视觉深度采集** — 可选 `--mode visual`，截图+视觉模型提取图片/完整正文
 - **实时保存** — 每帖持久化到 SQLite + 本地 MD + Notion
-- **下一步引导** — 每步操作后自动提示可用的后续命令
 
 ---
 
@@ -45,9 +45,8 @@ source ~/.zshrc
 # 4. 初始化
 xagent setup
 
-# 5. 开始（两种方式）
-xagent                    # 交互模式，引导选择
-xagent research "AI agent" # 直接调研（模糊概念自动拆解方向）
+# 5. 开始
+xagent research "mythos"   # 模糊概念 → 拆解方向 → 循环采集 → 视觉精读
 ```
 
 > 纯 API 模式无需任何系统权限。`--mode visual` 和 `--deep-read` 需 macOS 屏幕录制 + 辅助功能授权。
@@ -59,7 +58,7 @@ xagent research "AI agent" # 直接调研（模糊概念自动拆解方向）
 | 命令 | 说明 |
 |------|------|
 | `xagent` | 交互模式 — 引导选择操作 |
-| `xagent research "主题"` | 调研 — 模糊概念自动拆解方向，`--mode api`（默认）或 `--mode visual`，`--deep-read N` 精读 Top N |
+| `xagent research "主题"` | 调研 — 需求轮询 → 循环补采至 `--min-refs`(默认40) → 视觉精读 |
 | `xagent report "主题"` | 报告 — `--type research\|article\|summary`，带引用 |
 | `xagent analyze` | 分析 — 爆款风格：钩子类型 / 叙事结构 / 风格分布 |
 | `xagent write` | 写作 — 提取风格 → 通用草稿 → 平台适配 |
@@ -71,23 +70,6 @@ xagent research "AI agent" # 直接调研（模糊概念自动拆解方向）
 ---
 
 ## 使用流程
-
-### 交互模式
-
-```bash
-$ xagent
-
-  XAgent — X 平台 AI 调研与操作 Agent
-
-  1  🔍 调研    输入主题，引导拆解方向 → API 搜索 → 视觉精读
-  2  📊 分析    分析已采集内容的爆款风格
-  3  ✍️  写作    基于调研生成草稿
-  4  📋 总览    查看数据统计
-  5  🚀 完整流程 调研 → 报告 → 分析 → 写作
-
-  选择: 1
-  输入主题或概念: mythos
-```
 
 ### 需求轮询
 
@@ -106,11 +88,19 @@ $ xagent research "mythos"
   选择方向（多选用逗号，0=全部）: 1
 ```
 
-### 直接调研
+选择后，调研方向用于：
+1. **API 搜索** — 用方向的 keywords 发起搜索
+2. **相关性打分** — LLM 按确认的方向评估每条帖子的相关性
+3. **循环补采** — 不足40个有效引用时扩展搜索词继续搜索
+
+### 调研参数
 
 ```bash
-# 纯 API（默认，无需权限）+ 视觉精读 Top 3
-xagent research "AI agent" --limit 50
+# 默认: 循环补采至40个有效引用 + 视觉精读 Top 3
+xagent research "AI agent"
+
+# 自定义最少引用数
+xagent research "AI agent" --min-refs 60
 
 # 关闭视觉精读
 xagent research "AI agent" --deep-read 0
@@ -118,21 +108,19 @@ xagent research "AI agent" --deep-read 0
 # 精读 Top 5 高权重帖子
 xagent research "AI agent" --deep-read 5
 
-# 视觉深度采集（需 macOS 权限）
+# 视觉深度采集模式（需 macOS 权限）
 xagent research "AI agent" --mode visual
 ```
 
 ### 综合评分
 
-每个帖子按三维综合评分，不再仅靠 LLM 相关性：
-
 ```
 final_score = relevance × 0.3 + engagement × 0.4 + freshness × 0.3
               ─────────────     ──────────────     ──────────────
-              LLM 打分 1-5     互动归一化 0-5      时效性 0-5
+              方向驱动 1-5     互动归一化 0-5      时效性 0-5
 ```
 
-- **relevance**: LLM 对帖子与 AI/创业/科技的相关性打分
+- **relevance**: LLM 按用户确认的调研方向打分（5=直击要点，3=间接相关，1=不相关）
 - **engagement**: 批次内互动分归一化（likes + reposts×1.5 + replies×2 + views×0.01）
 - **freshness**: 7天内=5，30天内=3，更久=1
 
@@ -177,14 +165,6 @@ DATA_DIR=./data
 DESKTOP_MAX_CYCLES=20
 ```
 
-### Notion 数据库
-
-1. 创建数据库，包含属性：`名称`（标题）、`Platform`（单选）、`URL`（链接）、`Relevance`（数字）、`Likes`（数字）、`Tags`（多选）、`Collected`（日期）、`Status`（单选）、`Author`（文本）
-2. 将 Integration 分享到该数据库
-3. 填入 `.env`
-
-> 属性不匹配？运行 `python scripts/notion_editor.py fix` 自动修复。
-
 ### configs/
 
 **topics.yaml** — 默认搜索关键词
@@ -202,7 +182,7 @@ keywords:
 research:
   topics_per_run: 10
   posts_per_topic: 30
-  relevance_threshold: 2.0    # 综合评分阈值（原 3.0，现综合评分后可降低）
+  relevance_threshold: 2.0
 writing:
   top_k_sources: 5
 ```
@@ -211,36 +191,27 @@ writing:
 
 ## 架构
 
-### 双模式调研 + 视觉精读
-
 ```
-APIXResearcher (--mode api)
+用户输入模糊概念
   │
-  ├─ 需求轮询（模糊关键词 → LLM 拆解方向 → 用户确认）
-  ├─ search_tweets() [Bearer]
-  ├─ _collect_tweet() ×N
+  ├─ _clarify_topics()  → LLM 拆解方向 → 用户确认 → research_context
+  │
+  ▼
+APIXResearcher.discover()
+  │
+  ├─ search_tweets() [Bearer]  ×  N 个关键词
+  ├─ _collect_tweet()
   │   ├─ API 取正文/指标/媒体
   │   ├─ fetch_tweet_replies()
-  │   └─ LLM 相关性打分
-  ├─ score_batch()
-  │   └─ relevance×0.3 + engagement×0.4 + freshness×0.3
-  ├─ 筛选保存 → SQLite + MD + Notion
+  │   └─ score_relevance(research_context)  ← 按用户确认的方向打分
   │
-  └─ 视觉精读 (--deep-read N, 默认3)
-      └─ DesktopXResearcher.deep_read_posts()
-          ├─ 导航到 Top N 高权重帖子 URL
-          ├─ 视觉提取图片/视频/完整正文
-          └─ 更新 SQLite + MD + Notion
-
-DesktopXResearcher (--mode visual)
+  ├─ score_batch()  →  relevance×0.3 + engagement×0.4 + freshness×0.3
+  ├─ 筛选: final_score >= threshold → 保存,  < threshold → 舍弃
   │
-  ├─ search_tweets() [OAuth 1.0a]
-  ├─ _collect_and_save_tweet()
-  │   ├─ 视觉提取正文/指标
-  │   ├─ fetch_tweet_replies()
-  │   ├─ 视觉图片分析
-  │   └─ LLM 打分 + 摘要
-  └─ save → SQLite + MD + Notion
+  ├─ 有效引用 < 40?
+  │   └─ _expand_keywords()  → LLM 生成新搜索词 → 继续搜索
+  │
+  └─ deep_read_posts()  → Top N 高权重帖子 → 视觉提取图片/视频/完整正文
 ```
 
 ### 数据流
@@ -258,12 +229,12 @@ CollectedContent ──→ SQLite ──→ analyze / report / write
 
 ```
 app/
-  cli/               Typer CLI（交互入口 + Rich 美化）
+  cli/               Typer CLI（交互入口 + Rich 终端美化）
   core/              配置 · 错误 · 日志
   schemas/           数据模型（CollectedContent 含 final_score）
   llm/               LLM 客户端（OpenAI 兼容）
   research/          纯 API 调研
-    api_researcher.py    APIXResearcher
+    api_researcher.py    APIXResearcher（循环补采 + 方向驱动打分）
     scorer.py            综合评分（relevance + engagement + freshness）
   desktop/           视觉桌面控制
     computer_agent.py    see-think-act-verify 循环
@@ -278,9 +249,3 @@ configs/             YAML 配置
 prompts/             LLM 模板
 data/                运行时数据
 ```
-
----
-
-## 扩展
-
-添加 `app/platforms/<name>/` 目录实现平台规则。核心视觉循环和 API 调研器无需修改。

@@ -14,8 +14,48 @@ from app.desktop.research_agent import score_relevance, summarize_content, extra
 from app.research.scorer import score_batch
 from app.schemas.content import CollectedContent, Comment
 from rich.console import Console
+from rich.text import Text
 
 console = Console()
+
+# ── 视觉常量 ─────────────────────────────────────────────────────────
+
+C_DIM = "dim"
+C_BRAND = "#6C63FF"
+C_ACCENT = "#00D4AA"
+C_WARN = "#FF6B6B"
+
+
+def _fmt_num(n: int) -> str:
+    """紧凑数字格式: 1234 → 1.2K, 1234567 → 1.2M"""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}K"
+    return str(n)
+
+
+def _print_tweet_line(author: str, text: str, likes: int, replies: int, views: int, reposts: int, relevance: float | None = None, saved: bool = False) -> None:
+    """单行紧凑输出一条帖子。"""
+    # 指标部分
+    metrics = Text()
+    metrics.append(f" {_fmt_num(likes)}", style="dim")
+    metrics.append(f" {_fmt_num(reposts)}", style="dim")
+    metrics.append(f" {_fmt_num(replies)}", style="dim")
+    metrics.append(f" {_fmt_num(views)}", style="dim")
+
+    # 相关性
+    rel_style = C_ACCENT if relevance and relevance >= 4 else (C_WARN if relevance and relevance < 3 else "")
+    rel_str = f" R{relevance:.0f}" if relevance else ""
+
+    line = Text()
+    line.append(f"  @{author}", style="bold" if saved else "")
+    line.append(metrics)
+    if rel_str:
+        line.append(rel_str, style=rel_style)
+    line.append(f"  {text[:72]}", style="dim")
+
+    console.print(line)
 
 
 class APIXResearcher:
@@ -66,32 +106,30 @@ class APIXResearcher:
                 # 所有关键词都搜过了，用 LLM 生成扩展搜索词
                 new_topics = await self._expand_keywords(topics, research_context, searched_keywords)
                 if not new_topics:
-                    console.print(f"    [dim]无法生成更多搜索词，停止扩展[/dim]")
+                    console.print(f"    [{C_DIM}]无法生成更多搜索词，停止扩展[/{C_DIM}]")
                     break
 
             topics_to_search = new_topics[:topics_per_run]
             posts_per_topic = max(target_posts // max(len(topics_to_search), 1), 10)
 
-            console.print(f"\n[bold]🔍 搜索轮次 {search_round}[/bold] | 有效引用 {len(saved)}/{min_valid_refs} | 搜索 {len(topics_to_search)} 个关键词")
+            console.print(f"\n[{C_BRAND}]Round {search_round}[/{C_BRAND}]  [bold]{len(saved)}/{min_valid_refs}[/bold] saved  |  searching {len(topics_to_search)} keywords")
 
             round_contents: list[CollectedContent] = []
 
             for topic in topics_to_search:
                 searched_keywords.add(topic)
-                console.print(f"\n[cyan]{'='*50}[/cyan]")
-                console.print(f"[bold cyan]📡 API 搜索: {topic}[/bold cyan] (目标 {posts_per_topic} 帖)")
-                console.print(f"[cyan]{'='*50}[/cyan]")
+                console.print(f"\n  [{C_BRAND}]search[/{C_BRAND}] [bold]{topic}[/bold]")
 
                 try:
                     from app.integrations.x_api import search_tweets, sort_by_engagement
 
                     tweets = search_tweets(topic, max_results=posts_per_topic, sort_order="relevancy")
                     if not tweets:
-                        console.print(f"    [yellow]API 未返回结果[/yellow]")
+                        console.print(f"    [{C_DIM}]no results[/{C_DIM}]")
                         continue
 
                     tweets = sort_by_engagement(tweets)
-                    console.print(f"    [dim]API 返回 {len(tweets)} 条，按互动量排序[/dim]")
+                    console.print(f"    [{C_DIM}]{len(tweets)} tweets found[/{C_DIM}]")
 
                     for tweet in tweets:
                         # 去重
@@ -106,7 +144,7 @@ class APIXResearcher:
                     await asyncio.sleep(random.uniform(2, 4))
 
                 except Exception as e:
-                    console.print(f"    [yellow]搜索失败: {e}[/yellow]")
+                    console.print(f"    [{C_WARN}]search failed: {e}[/{C_WARN}]")
                     continue
 
             if not round_contents:
@@ -116,7 +154,7 @@ class APIXResearcher:
 
             # 综合评分 + 筛选
             all_contents.extend(round_contents)
-            console.print(f"\n[bold]📊 综合评分（相关性×0.3 + 互动×0.4 + 时效×0.3）...[/bold]")
+            console.print(f"\n  [{C_BRAND}]scoring[/{C_BRAND}] batch of {len(all_contents)}...")
             scored = score_batch(all_contents)
 
             # 筛选有效引用
@@ -138,12 +176,15 @@ class APIXResearcher:
                 # 保存
                 save_content(content)
                 md_path = save_content_to_md(content)
+
+                score_style = C_ACCENT if content.final_score >= 3.5 else ""
                 console.print(
-                    f"  [green]✓[/green] @{content.author} "
-                    f"| ❤{content.metrics.likes} 🔁{content.metrics.reposts} "
-                    f"| 💬{len(content.comments)} 👁{content.metrics.views} "
-                    f"| ⭐{content.final_score:.1f} "
-                    f"| MD:{md_path.split('/')[-1]}"
+                    f"  [{C_ACCENT}]saved[/{C_ACCENT}] "
+                    f"@{content.author}  "
+                    f"{_fmt_num(content.metrics.likes)} {_fmt_num(content.metrics.reposts)} "
+                    f"{_fmt_num(len(content.comments))} {_fmt_num(content.metrics.views)}  "
+                    f"[{score_style}]{content.final_score:.1f}[/{score_style}]  "
+                    f"[{C_DIM}]{md_path.split('/')[-1]}[/{C_DIM}]"
                 )
 
                 save_reference(
@@ -171,7 +212,7 @@ class APIXResearcher:
                     "relevance_score": content.relevance_score,
                 })
 
-            console.print(f"\n  [bold]当前有效引用: {len(saved)}/{min_valid_refs}[/bold]")
+            console.print(f"\n  [bold]{len(saved)}/{min_valid_refs}[/bold] refs")
 
         logger.info(f"API 调研完成: 采集 {len(all_contents)} 条，有效保存 {len(saved)} 条（{search_round} 轮搜索）")
         return saved
@@ -200,7 +241,7 @@ class APIXResearcher:
             if isinstance(keywords, list):
                 new_kws = [str(k) for k in keywords if str(k) not in already_searched]
                 if new_kws:
-                    console.print(f"    [dim]扩展搜索词: {', '.join(new_kws[:6])}[/dim]")
+                    console.print(f"    [{C_DIM}]expanded: {', '.join(new_kws[:6])}[/{C_DIM}]")
                 return new_kws
         except Exception:
             pass
@@ -213,8 +254,6 @@ class APIXResearcher:
         from app.integrations.x_api import fetch_tweet_replies, sort_comments
 
         author = tweet.author_username
-        console.print(f"\n  [dim]▶ @{author} ❤{tweet.likes} 💬{tweet.replies} 👁{tweet.views}")
-        console.print(f"    {tweet.text[:80]}...")
 
         # 1. 构建 CollectedContent
         content_id = f"x:{author}:{tweet.id}"
@@ -241,7 +280,6 @@ class APIXResearcher:
                 pass
 
         # 2. 获取评论
-        console.print(f"    [cyan]📥 获取评论...[/cyan]")
         comments = fetch_tweet_replies(tweet.id, max_results=max(min_comments, 15))
         if comments:
             comments = sort_comments(comments)
@@ -249,9 +287,6 @@ class APIXResearcher:
                 Comment(author=c.author_username, text=c.text, likes=c.likes, url=c.url)
                 for c in comments[:min_comments]
             ]
-            console.print(f"    [dim]  获取到 {len(comments)} 条评论，取 Top {min_comments}[/dim]")
-        else:
-            console.print(f"    [dim]  无评论[/dim]")
 
         # 3. 计算互动分
         content.engagement_score = (
@@ -263,10 +298,13 @@ class APIXResearcher:
 
         # 4. LLM 相关性打分（按用户确认的调研方向）
         content.relevance_score = await score_relevance(content, research_context=research_context)
-        console.print(
-            f"    [dim]相关性 {content.relevance_score:.1f} | "
-            f"❤{content.metrics.likes} 🔁{content.metrics.reposts} "
-            f"💬{len(content.comments)} 👁{content.metrics.views}[/dim]"
+
+        # 单行输出
+        _print_tweet_line(
+            author, tweet.text,
+            content.metrics.likes, len(content.comments),
+            content.metrics.views, content.metrics.reposts,
+            relevance=content.relevance_score,
         )
 
         return content
