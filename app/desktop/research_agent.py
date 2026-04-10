@@ -268,6 +268,118 @@ class DesktopXResearcher:
 
         return content
 
+    # ── 视觉精读高权重帖子 ──────────────────────────────────────────
+
+    async def deep_read_posts(self, posts: list[dict]) -> list[dict]:
+        """API 调研后，用视觉精读高权重帖子，提取图片/视频/完整正文。
+
+        posts: _research_async 返回的帖子摘要列表，含 source_url / content_id
+        返回: 更新后的帖子列表
+        """
+        if not posts:
+            return posts
+
+        console.print(f"\n[bold cyan]🔍 视觉精读 Top {len(posts)} 高权重帖子...[/bold cyan]")
+
+        # 先打开浏览器
+        console.print("[dim]打开浏览器...[/dim]")
+        try:
+            await self.agent.run(
+                "Focus Safari with Cmd+Tab. If Safari isn't visible, use Cmd+Space to open it. Then Cmd+L to focus address bar, type x.com, press Enter. STOP once x.com is loaded.",
+                context={"target_url": "x.com", "browser": "Safari"},
+                plan_context={
+                    "overall_goal": f"视觉精读 {len(posts)} 个高权重帖子",
+                    "current_step": "打开浏览器",
+                    "completed_steps": [],
+                    "next_steps": ["逐个打开帖子", "提取图片/视频信息"],
+                },
+            )
+        except Exception as e:
+            console.print(f"[yellow]浏览器打开失败: {e}[/yellow]")
+            return posts
+
+        await self._focus_browser()
+
+        from app.memory.sqlite_repo import save_content, save_content_to_md
+
+        updated = []
+        for i, post in enumerate(posts, 1):
+            url = post.get("source_url", "")
+            content_id = post.get("content_id", "")
+
+            if not url:
+                continue
+
+            console.print(f"\n  [{BRAND}]精读 {i}/{len(posts)}[/] @{post.get('author', '')} ⭐{post.get('final_score', 0):.1f}")
+
+            # 导航到帖子
+            try:
+                await self.agent.run(
+                    f"Use Cmd+L to focus address bar, then type or paste this URL and press Enter: {url}",
+                    context={"tweet_url": url},
+                    plan_context={
+                        "overall_goal": f"视觉精读帖子 ({i}/{len(posts)})",
+                        "current_step": f"导航到帖子",
+                        "completed_steps": [],
+                        "next_steps": ["提取图片和视频信息"],
+                    },
+                    max_cycles=6,
+                )
+            except Exception as e:
+                console.print(f"    [yellow]导航失败: {e}[/yellow]")
+                continue
+
+            await asyncio.sleep(2)
+
+            # 截图记录
+            obs = await observe_desktop(f"精读帖子 {i}")
+
+            # 视觉提取完整信息
+            post_data = await self._extract_post_content(obs.screenshot_path, post.get("author", ""))
+
+            # 从数据库加载已有 content 并更新
+            from app.memory.sqlite_repo import load_collected_content_by_id
+            content = load_collected_content_by_id(content_id) if content_id else None
+
+            if content:
+                # 更新图片信息
+                if post_data and post_data.get("has_image") and post_data.get("images"):
+                    console.print(f"    [cyan]📸 分析 {len(post_data['images'])} 张图片...[/cyan]")
+                    content.images = []  # 重新填充
+                    await self._analyze_images(content, post_data["images"])
+
+                # 更新截图
+                content.screenshots.append(obs.screenshot_path)
+
+                # 视觉补充正文（如果 API 文本被截断）
+                if post_data and post_data.get("body_text") and len(post_data["body_text"]) > len(content.body_text):
+                    content.body_text = post_data["body_text"]
+                    console.print(f"    [dim]正文已更新: {len(content.body_text)} 字[/dim]")
+
+                # 检测视频
+                if post_data and post_data.get("has_video"):
+                    content.images.append("[视频] 帖子包含视频内容")
+                    console.print(f"    [cyan]🎬 检测到视频内容[/cyan]")
+
+                # 保存更新
+                save_content(content)
+                save_content_to_md(content)
+                await sync_to_notion(content)
+                console.print(f"    [green]✓ 已更新图片/视频信息[/green]")
+
+            post["deep_read"] = True
+            updated.append(post)
+
+            # 返回
+            try:
+                await self._go_back()
+            except Exception:
+                pass
+            await asyncio.sleep(random.uniform(1, 2))
+
+        logger.info(f"视觉精读完成: {len(updated)} 个帖子")
+        return updated
+
     # ── 视觉辅助方法 ──────────────────────────────────────────────────
 
     async def _go_back(self) -> None:

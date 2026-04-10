@@ -2,8 +2,7 @@
 XAgent CLI  —  xagent <command>
 
 Commands:
-  explore    模糊概念引导 → 拆解方向 → 调研
-  research   X 调研（默认纯 API）
+  research   X 调研（自动轮询方向 → API 搜索 → 视觉精读）
   report     生成调研报告
   analyze    爆款风格分析
   write      根据调研生成草稿
@@ -100,63 +99,51 @@ def main(ctx: typer.Context):
     menu.add_column("序号", style=BRAND, width=4)
     menu.add_column("功能")
     menu.add_column("说明", style="dim")
-    menu.add_row("1", "🔍 探索", "输入模糊概念，引导拆解方向后调研")
-    menu.add_row("2", "📡 调研", "直接搜索 X 上的热门话题和帖子")
-    menu.add_row("3", "📊 分析", "分析已采集内容的爆款风格")
-    menu.add_row("4", "✍️  写作", "基于调研生成草稿")
-    menu.add_row("5", "📋 总览", "查看数据统计")
-    menu.add_row("6", "🚀 完整流程", "调研 → 报告 → 分析 → 写作")
+    menu.add_row("1", "🔍 调研", "输入主题，引导拆解方向 → API 搜索 → 视觉精读")
+    menu.add_row("2", "📊 分析", "分析已采集内容的爆款风格")
+    menu.add_row("3", "✍️  写作", "基于调研生成草稿")
+    menu.add_row("4", "📋 总览", "查看数据统计")
+    menu.add_row("5", "🚀 完整流程", "调研 → 报告 → 分析 → 写作")
     console.print(menu)
     console.print("")
 
     choice = typer.prompt("选择", type=int, default=1)
 
     if choice == 1:
-        keyword = typer.prompt("输入关键词或概念")
-        asyncio.run(_explore_async(keyword))
-    elif choice == 2:
-        topics_str = typer.prompt("搜索主题（空格分隔）", default="")
+        topics_str = typer.prompt("输入主题或概念", default="")
         topics = topics_str.split() if topics_str else []
-        asyncio.run(_research_async(topics or [], 50, 10, "api"))
-    elif choice == 3:
+        asyncio.run(_research_async(topics or [], 50, 10))
+    elif choice == 2:
         days = typer.prompt("分析最近几天", type=int, default=7)
         asyncio.run(_analyze_async(days, "x"))
-    elif choice == 4:
+    elif choice == 3:
         topic = typer.prompt("主题提示", default="")
         asyncio.run(_write_async(topic, "article", 7, "x"))
-    elif choice == 5:
+    elif choice == 4:
         _status_impl()
-    elif choice == 6:
-        topics_str = typer.prompt("搜索主题（空格分隔）", default="")
+    elif choice == 5:
+        topics_str = typer.prompt("输入主题或概念", default="")
         topics = topics_str.split() if topics_str else []
         asyncio.run(_full_flow_async(topics))
     else:
         console.print(f"[{WARN}]无效选择[/]")
 
 
-# ── explore ────────────────────────────────────────────────────────────
+# ── 需求轮询 ──────────────────────────────────────────────────────────
 
-@cli.command()
-def explore(
-    keyword: str = typer.Argument(..., help="模糊关键词或概念"),
-    limit: int = typer.Option(50, "--limit", "-n", help="目标采集帖子数"),
-):
-    """模糊概念引导 — 拆解方向后调研。"""
-    asyncio.run(_explore_async(keyword, limit))
+async def _clarify_topics(topics: list[str]) -> list[str]:
+    """对模糊/单一关键词做方向拆解，让用户确认后返回具体搜索词。"""
+    if not topics or len(topics) > 3 or all(len(t) > 20 for t in topics):
+        return topics
 
-
-async def _explore_async(keyword: str, limit: int = 50):
-    init_db()
-    _banner("XAgent 探索", f"关键词: {keyword}")
-
-    # 1. 用 LLM 拆解方向
-    console.print(f"    [{BRAND}]▶[/] 分析「{keyword}」的潜在方向...")
+    keyword = " ".join(topics)
+    console.print(f"\n    [{BRAND}]▶[/] 分析「{keyword}」的调研方向...")
 
     from app.llm.client import chat
     from app.desktop.research_agent import _safe_extract_json
 
     prompt = (
-        f"用户给了一个模糊的关键词「{keyword}」，请拆解为 3-5 个具体的研究方向。\n"
+        f"用户想调研「{keyword}」，请拆解为 3-5 个具体的研究方向。\n"
         "每个方向需包含：\n"
         '  - id: 序号\n'
         '  - name: 方向名称（简短）\n'
@@ -174,11 +161,10 @@ async def _explore_async(keyword: str, limit: int = 50):
         if not isinstance(directions, list) or not directions:
             raise ValueError("空结果")
     except Exception:
-        console.print(f"[{WARN}]无法拆解方向，直接搜索「{keyword}」[/]")
-        await _research_async([keyword], limit, 10, "api")
-        return
+        console.print(f"    [dim]无法拆解方向，直接搜索[/dim]")
+        return topics
 
-    # 2. 显示方向
+    # 显示方向
     console.print(f"\n    「{keyword}」可拆解为以下方向：\n")
     t = Table.grid(padding=(0, 2))
     t.add_column("序号", style=BRAND, width=4)
@@ -191,7 +177,6 @@ async def _explore_async(keyword: str, limit: int = 50):
     console.print(t)
     console.print("")
 
-    # 3. 用户选择
     choice = typer.prompt("选择方向（多选用逗号，0=全部）", default="0")
     selected = []
     if choice.strip() == "0":
@@ -204,13 +189,9 @@ async def _explore_async(keyword: str, limit: int = 50):
                 if 1 <= idx <= len(directions):
                     selected.extend(directions[idx - 1].get("keywords", []))
         except (ValueError, IndexError):
-            selected = [keyword]
+            selected = topics
 
-    if not selected:
-        selected = [keyword]
-
-    console.print(f"\n    [dim]将搜索: {', '.join(selected)}[/dim]")
-    await _research_async(selected, limit, 10, "api")
+    return selected if selected else topics
 
 
 # ── setup ──────────────────────────────────────────────────────────────
@@ -222,17 +203,14 @@ def setup():
 
     s = get_settings()
 
-    # Step 1: 检查 Python
     py_ver = f"{_plat.python_version()} {_plat.python_implementation()}"
     _step(f"Python 环境: {py_ver}", done=True)
 
-    # Step 2: 检查配置
     has_key = bool(s.llm_api_key)
     _step(f"LLM API Key: {'已配置 ✓' if has_key else '未配置 ✗'}", done=has_key)
     if not has_key:
         console.print(f"    [{WARN}]请在 .env 中设置 LLM_API_KEY[/{WARN}]")
 
-    # Step 3: 创建目录
     dirs = [
         ("数据目录", s.data_path),
         ("资源目录", s.assets_path),
@@ -247,12 +225,10 @@ def setup():
         path.mkdir(parents=True, exist_ok=True)
     _step("目录结构创建完成", done=True)
 
-    # Step 4: 初始化数据库
     _step("初始化 SQLite 数据库...")
     init_db()
     _step("数据库初始化完成", done=True)
 
-    # Step 5: 检查权限
     _step("检查 macOS 权限...")
     from app.desktop.permissions import (
         check_screen_recording,
@@ -272,7 +248,6 @@ def setup():
             console.print(f"    [dim]系统设置 → 隐私与安全性 → 辅助功能 → 启用终端[/dim]")
         console.print(f"    [dim]授予权限后需重启 Terminal 生效[/dim]")
 
-    # Summary
     _rule()
     console.print("")
     summary = Table.grid(padding=(0, 2))
@@ -286,8 +261,7 @@ def setup():
     console.print(Panel(summary, title="[bold green]Setup 完成[/bold green]", border_style="green"))
     console.print("")
     _next_steps(
-        'xagent explore "你的概念"  — 模糊概念引导调研',
-        'xagent research "AI agent"  — 直接搜索调研',
+        'xagent research "你的概念"  — 调研（自动引导方向）',
         'xagent  — 交互模式',
     )
 
@@ -312,46 +286,53 @@ def research(
     limit: int = typer.Option(50, "--limit", "-n", help="目标采集帖子数（默认50）"),
     min_comments: int = typer.Option(10, "--min-comments", "-c", help="每个帖子最少评论数（默认10）"),
     mode: str = typer.Option("api", "--mode", "-m", help="调研模式: api | visual"),
+    deep_read: int = typer.Option(3, "--deep-read", "-d", help="API 调研后视觉精读 Top N 帖子（0=关闭）"),
 ):
-    """X 调研 — 搜索 → 热度排序 → 采集 → 实时保存 MD + Notion。"""
+    """X 调研 — 轮询方向 → API 搜索 → 视觉精读 → 保存。"""
     if mode not in ("api", "visual"):
         console.print(f"[{WARN}]无效模式 '{mode}'，请使用 api 或 visual[/]")
         raise typer.Exit(1)
-    asyncio.run(_research_async(topics or [], limit, min_comments, mode))
+    asyncio.run(_research_async(topics or [], limit, min_comments, mode, deep_read))
 
 
-async def _research_async(topics: list[str], limit: int, min_comments: int, mode: str = "api"):
+async def _research_async(topics: list[str], limit: int, min_comments: int, mode: str = "api", deep_read: int = 3):
     from app.memory.sqlite_repo import count_references
 
     init_db()
+
+    # ── Phase 0: 需求轮询 ────────────────────────────────────────────
+    topic_cfg = load_yaml("configs/topics.yaml")
+    if not topics:
+        topics = topic_cfg.get("keywords", [])
+
+    # 对模糊关键词做方向拆解
+    topics = await _clarify_topics(topics)
 
     if mode == "visual":
         from app.desktop.permissions import check_all_permissions
         check_all_permissions()
 
     mode_label = "纯 API" if mode == "api" else "视觉 + API"
-    _banner("XAgent 调研启动", f"{mode_label} · 热度排序 · 综合评分 · 目标 {limit} 帖")
-
-    topic_cfg = load_yaml("configs/topics.yaml")
-    if not topics:
-        topics = topic_cfg.get("keywords", [])
+    _banner("XAgent 调研启动", f"{mode_label} · 综合评分 · 目标 {limit} 帖")
 
     # Show plan
     plan = Table.grid(padding=(0, 1))
     plan.add_column("步骤", style=BRAND)
     plan.add_column("内容")
-    if mode == "visual":
-        plan.add_row("1", "打开 Safari → 导航到 x.com")
-        plan.add_row("2", f"X API 搜索 {len(topics)} 个主题，按互动量排序: {', '.join(topics[:5])}{'...' if len(topics) > 5 else ''}")
-        plan.add_row("3", f"逐个点开高热度帖子 → 正文/图片/API 评论({min_comments}+) → 权重打分")
-    else:
+    if mode == "api":
         plan.add_row("1", f"X API 搜索 {len(topics)} 个主题: {', '.join(topics[:5])}{'...' if len(topics) > 5 else ''}")
         plan.add_row("2", f"逐帖采集 → API 正文/评论({min_comments}+) → LLM 打分")
         plan.add_row("3", "综合评分（相关性×0.3 + 互动×0.4 + 时效×0.3）→ 筛选保存")
-    plan.add_row("4", f"目标采集 {limit} 条")
+        if deep_read > 0:
+            plan.add_row("4", f"视觉精读 Top {deep_read} 高权重帖子（图片/视频/完整正文）")
+    else:
+        plan.add_row("1", "打开 Safari → 导航到 x.com")
+        plan.add_row("2", f"X API 搜索 {len(topics)} 个主题，按互动量排序")
+        plan.add_row("3", f"逐个点开高热度帖子 → 正文/图片/API 评论({min_comments}+) → 权重打分")
     console.print(Panel(plan, title="[bold]执行计划[/bold]", border_style=BRAND))
     console.print("")
 
+    # ── Phase 1: API 调研 ─────────────────────────────────────────────
     if mode == "api":
         from app.research.api_researcher import APIXResearcher
         researcher = APIXResearcher()
@@ -364,10 +345,36 @@ async def _research_async(topics: list[str], limit: int, min_comments: int, mode
     if not posts:
         console.print(f"\n[{WARN}]未发现相关帖子[/]")
         _next_steps(
-            'xagent explore "你的概念"  — 换个更模糊的关键词试试',
-            'xagent research "其他主题"  — 换个主题',
+            'xagent research "换个主题"  — 换个主题再试',
         )
         return
+
+    # ── Phase 2: 视觉精读（仅 API 模式 + deep_read > 0）────────────
+    if mode == "api" and deep_read > 0 and posts:
+        try:
+            from app.desktop.permissions import check_all_permissions
+            check_all_permissions()
+
+            from app.desktop.research_agent import DesktopXResearcher
+            visual_reader = DesktopXResearcher()
+
+            # 取 Top N 高权重帖子，附上 source_url 和 content_id
+            top_sorted = sorted(posts, key=lambda x: x.get("final_score", 0), reverse=True)[:deep_read]
+            top_with_url = []
+            for p in top_sorted:
+                from app.memory.sqlite_repo import load_collected_content_by_id
+                cid = p.get("content_id", "")
+                full = load_collected_content_by_id(cid) if cid else None
+                top_with_url.append({
+                    "source_url": full.source_url if full else "",
+                    "content_id": cid,
+                    "author": p.get("author", ""),
+                    "final_score": p.get("final_score", 0),
+                })
+
+            await visual_reader.deep_read_posts(top_with_url)
+        except Exception as e:
+            console.print(f"\n    [{WARN}]视觉精读跳过（权限不足或出错: {e}）[/{WARN}]")
 
     # ── 结果展示 ──────────────────────────────────────────────────────
     avg_final = sum(p.get("final_score", 0) for p in posts) / len(posts) if posts else 0
@@ -420,7 +427,7 @@ async def _research_async(topics: list[str], limit: int, min_comments: int, mode
     _next_steps(
         f'xagent report "{topic_str}"  — 生成调研报告',
         "xagent analyze  — 爆款风格分析",
-        f'xagent explore "{topic_str}"  — 深入调研子方向',
+        f'xagent research "{topic_str}" --deep-read 5  — 精读更多帖子',
     )
 
 
@@ -428,12 +435,10 @@ async def _research_async(topics: list[str], limit: int, min_comments: int, mode
 
 async def _full_flow_async(topics: list[str]):
     """调研 → 报告 → 分析 → 写作 全流程。"""
-    # Step 1: 调研
-    await _research_async(topics, 30, 10, "api")
+    await _research_async(topics, 30, 10)
 
     topic = topics[0] if topics else ""
 
-    # Step 2: 报告
     console.print("\n[bold]── Step 2/4: 生成报告 ──[/bold]\n")
     from app.analysis.report import generate_report, save_report_to_file
     markdown = await generate_report(topic, days=7, report_type="research")
@@ -441,11 +446,9 @@ async def _full_flow_async(topics: list[str]):
         filepath = save_report_to_file(markdown, topic)
         console.print(f"  [green]✓ 报告已保存: {filepath}[/green]")
 
-    # Step 3: 分析
     console.print("\n[bold]── Step 3/4: 爆款风格分析 ──[/bold]\n")
     await _analyze_async(7, "x")
 
-    # Step 4: 写作
     console.print("\n[bold]── Step 4/4: 生成草稿 ──[/bold]\n")
     await _write_async(topic, "article", 7, "x")
 
@@ -486,7 +489,6 @@ async def _report_async(topic: str, report_type: str, days: int):
     console.print(f"    [{ACCENT}]✓ 报告已保存: {filepath}[/{ACCENT}]")
     console.print("")
 
-    # Show preview
     preview = markdown[:800] + ("..." if len(markdown) > 800 else "")
     console.print(Panel(preview, title=f"[bold]{topic} — 预览[/bold]", border_style=ACCENT))
     console.print("")
@@ -539,7 +541,6 @@ async def _analyze_async(days: int, platform: str):
         console.print(f"[{WARN}]所有分析均失败[/]")
         return
 
-    # Results table
     from collections import Counter
     hooks = Counter(p.hook_type for p in patterns if p.hook_type)
     structures = Counter(p.narrative_structure for p in patterns if p.narrative_structure)
@@ -560,7 +561,7 @@ async def _analyze_async(days: int, platform: str):
 
     _next_steps(
         'xagent write --topic "主题"  — 基于风格生成草稿',
-        'xagent explore "新方向"  — 深入调研',
+        'xagent research "新方向"  — 继续调研',
     )
 
 
@@ -682,7 +683,6 @@ async def _publish_async(draft_id: str, platform: str, skip_review: bool):
 
     _banner("发布草稿", f"{platform.upper()} · {draft.title}")
 
-    # Show draft preview
     preview = draft.body[:500] + ("..." if len(draft.body) > 500 else "")
     console.print(Panel(preview, title="[bold]草稿预览[/bold]", border_style=ACCENT))
     console.print("")
@@ -718,7 +718,6 @@ def _status_impl():
 
     _banner("数据总览", "XAgent")
 
-    # Overview
     overview = Table.grid(padding=(0, 2))
     overview.add_column("指标", style=BRAND)
     overview.add_column("值", style="bold")
@@ -730,7 +729,6 @@ def _status_impl():
     console.print(Panel(overview, title="[bold]总览[/bold]", border_style=BRAND))
     console.print("")
 
-    # Drafts table
     if drafts:
         d = Table(title="待发布草稿", border_style=BRAND)
         d.add_column("ID", style="dim", width=12)
@@ -742,7 +740,6 @@ def _status_impl():
         console.print(d)
         console.print("")
 
-    # Recent content
     if sources:
         c = Table(title="最近采集内容 (Top 10)", border_style=BRAND)
         c.add_column("作者", style=BRAND)
@@ -764,7 +761,7 @@ def _status_impl():
         console.print("")
 
     _next_steps(
-        'xagent explore "新方向"  — 继续调研',
+        'xagent research "新方向"  — 继续调研',
         'xagent write  — 生成草稿',
     )
 

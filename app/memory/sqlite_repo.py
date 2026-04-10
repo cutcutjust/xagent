@@ -180,6 +180,16 @@ def load_collected_content(
     return [_row_to_content(r) for r in rows]
 
 
+def load_collected_content_by_id(content_id: str) -> CollectedContent | None:
+    """Load a single CollectedContent by its content_id."""
+    with _conn() as db:
+        row = db.execute(
+            "SELECT * FROM collected_content WHERE content_id=?",
+            (content_id,),
+        ).fetchone()
+    return _row_to_content(row) if row else None
+
+
 def save_content_to_md(c: CollectedContent) -> str:
     """Save a single post to local MD file. Returns file path."""
     s = get_settings()
