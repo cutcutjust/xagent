@@ -32,85 +32,97 @@ _SYSTEM_PROMPT = """You are controlling a macOS desktop by looking at screenshot
 | right_click_at | x, y, description | Right-click for context menu |
 | type_text | text | Type text into a focused field |
 | hotkey | keys: ["cmd","l"] | Keyboard shortcut |
-| drag_to | x, y, reason | Drag from current position |
-| drag_by | dx, dy, reason | Drag by offset (e.g. scroll bar) |
+| drag_to | x, y, duration, reason | Drag from current position to x,y |
+| drag_by | dx, dy, duration, reason | Drag by offset |
 | scroll | direction: up/down, amount | Scroll at current position |
 | scroll_at | x, y, direction, amount | Scroll at specific position |
 | wait | seconds: 2.0 | Wait for page load |
 | done | - | Task is complete |
 | human | message | Need human help |
 
+## Coordinate System
+- Output coordinates in a 1000x1000 normalized space as integers.
+- (0,0) = top-left corner, (1000,1000) = bottom-right corner.
+- The system maps these to actual screen pixels automatically.
+- x and y MUST be separate numeric fields (not text in description).
+- Example: "x": 520, "y": 140 — NOT "description": "(520, 140)"
+
+## Planning Strategy
+Think like a researcher, not a robot. Don't follow a rigid script.
+1. **Assess the current state** — what page, what's visible, what's hidden.
+2. **Plan adaptively** — if metrics aren't visible, scroll to find them. If a comment section is collapsed, click to expand. If an image is present, click to view full size.
+3. **Verify after each action** — did the page change as expected? If not, try a different approach.
+4. **Explore thoroughly** — for X posts: check replies count, scroll through comments, click images, check retweets/quotes, note view counts.
+5. **Be persistent but not stuck** — if something doesn't work after 2 tries, try a different method.
+
 ## Opening Applications — ALWAYS Use Spotlight
 To open or switch to an application, use Cmd+Space then type the app name:
 1. hotkey: keys=["command", "space"] — open Spotlight
-2. wait: seconds=0.5 — wait for Spotlight search bar
-3. type_text: text="Safari" — type app name
-4. hotkey: keys=["return"] — open it
-5. wait: seconds=2.0 — wait for app to launch
+2. wait: seconds=0.5
+3. type_text: text="Safari"
+4. hotkey: keys=["return"]
+5. wait: seconds=2.0
 
-Do NOT click dock icons — they are unreliable (app may already be running but window hidden). Spotlight always works.
+Do NOT click dock icons — Spotlight is more reliable.
 
-## Navigating to a URL in Browser — ALWAYS Do This
-To navigate to a URL, use this exact sequence:
-1. hotkey: keys=["command", "l"] — focus and select the address bar (Cmd+L selects all)
-2. wait: seconds=0.3 — brief pause
-3. type_text: text="https://x.com" — type the URL (address bar is already selected)
-4. hotkey: keys=["return"] — navigate to the URL
-5. wait: seconds=3.0 — wait for page to fully load
+## Navigating to a URL — ALWAYS Use Address Bar
+1. hotkey: keys=["command", "l"] — focus address bar
+2. wait: seconds=0.3
+3. type_text: text="https://x.com"
+4. hotkey: keys=["return"]
+5. wait: seconds=3.0
 
-Do NOT click the address bar with mouse coordinates — Cmd+L is more reliable and always selects all existing text.
+## X (Twitter) Specific Tips
+- **Metrics**: Post engagement (likes, reposts, views) are usually visible at the bottom of a post detail page. If not visible, scroll down slightly.
+- **Comments/Replies**: Scroll down on a post detail page to see replies. Click "Show more replies" if collapsed.
+- **Images**: Click on images in a post to view them full-size. Use back button to return.
+- **Search**: If a search shows wrong results, clear the search box and try again with exact username (e.g., "from:AnthropicAI mythos").
+- **Author matching**: X usernames may differ from display names. @AnthropicAI is the official account, not @anthropic.com.
+- **URL format**: Post URLs are like https://x.com/username/status/1234567890
 
 ## macOS Keyboard Shortcuts Reference
-- Cmd+Space: Spotlight search (for opening apps)
-- Cmd+Tab: Switch between running applications
-- Cmd+L: Focus browser address bar
-- Cmd+A: Select all text
-- Cmd+C/V/X: Copy/Paste/Cut
-- Cmd+W: Close current tab/window
-- Cmd+T: New browser tab
-- Cmd+R: Refresh page
-- Cmd+[: Go back in browser history
-- Cmd+]: Go forward in browser history
-- Page Down / Page Up / Space: Scroll page
-- Escape: Close dialog / cancel
-- Enter/Return: Confirm / submit
-- Tab: Focus next field
-
-## Rules
-1. Look at the screenshot FIRST. Identify what app is focused and what page/state it shows.
-2. To open an application, ALWAYS use Cmd+Space + type name + Enter. NEVER click dock icons.
-3. Output coordinates in pixels. (0,0) = top-left. x increases right, y increases down.
-4. Stay within screen bounds. Use element centers as click targets.
-5. Be human-like: natural timing, don't rush between steps.
-6. If the page is loading, use "wait" action.
-7. If stuck (pop-ups, dialogs you can't handle), use "human" action.
-8. If the task is done, use "done" action.
-9. NEVER generate more than 3 steps at once.
-10. Output ONLY valid JSON.
+- Cmd+Space: Spotlight
+- Cmd+Tab: Switch apps
+- Cmd+L: Focus address bar
+- Cmd+A/C/V/X: Select/Copy/Paste/Cut
+- Cmd+W: Close tab
+- Cmd+T: New tab
+- Cmd+R: Refresh
+- Cmd+[: Go back
+- Cmd+]: Go forward
+- Space/PageDown/PageUp: Scroll
+- Escape: Close dialog
+- Tab: Focus next element
 
 ## Output Format
+Output ONLY valid JSON matching this structure:
 {
   "observation": {
     "app_name": "Safari",
-    "page_type": "x_search_results",
-    "visible_elements": ["search_box", "post_1", "post_2"],
-    "url_visible": "x.com/search?q=AI",
+    "page_type": "x_post_detail",
+    "visible_elements": ["post_body", "likes:1858", "views:69K", "comments_section"],
+    "url_visible": "x.com/user/status/123",
     "errors_or_dialogs": [],
     "is_loading": false,
     "confidence": 0.9
   },
   "steps": [
     {
-      "action": "click_at",
-      "reason": "Click the search box to focus it",
-      "x": 900,
-      "y": 120,
-      "description": "Search box in top-right area"
+      "action": "scroll",
+      "reason": "Scroll down to see engagement metrics",
+      "direction": "down",
+      "amount": 10
     }
   ],
   "confidence": 0.9,
   "notes": ""
-}"""
+}
+
+IMPORTANT:
+- Each step's x and y must be integers between 0 and 1000
+- Use clear, actionable descriptions
+- Plan 1-3 steps that make sense for the current state
+- If metrics/data aren't visible, scroll or click to reveal them"""
 
 
 # ── ComputerAgent ────────────────────────────────────────────────────────
@@ -134,6 +146,8 @@ class ComputerAgent:
         self._actions_executed: list[PlannedAction] = []
         self._last_actions: list[str] = []
         self._llm_failures: int = 0
+        # Full conversation history with screenshot context (like qwen_autogui)
+        self._conversation_history: list[dict] = []
 
     def _log(self, msg: str, style: str = "") -> None:
         """Print to console if verbose."""
@@ -185,6 +199,12 @@ class ComputerAgent:
         """
         logger.info(f"[ComputerAgent] Starting task: {task}")
         self._log(f"[Agent] 任务: {task}", "dim")
+
+        # Reset per-task state (agent is reused across collect calls)
+        self._history = []
+        self._conversation_history = []
+        self._last_actions = []
+        self._llm_failures = 0
 
         for cycle in range(1, self.max_cycles + 1):
             # Check stop event
@@ -292,8 +312,6 @@ class ComputerAgent:
 
             await asyncio.sleep(1)
 
-            await asyncio.sleep(1)
-
         self._log(f"达到最大循环次数 ({self.max_cycles})", "yellow")
         return ExecutionResult(status="max_cycles", actions=self._actions_executed, notes=f"Reached max cycles ({self.max_cycles})")
 
@@ -303,7 +321,11 @@ class ComputerAgent:
         task: str,
         context: dict | None = None,
     ) -> ActionPlan:
-        """Single LLM call with timeout: observe page state + decide next actions."""
+        """Single LLM call with timeout: observe page state + decide next actions.
+
+        Builds a multi-turn conversation with the full screenshot history,
+        so the model can see how the screen changed after each action.
+        """
         prompt_parts = [
             f"TASK: {task}",
             f"SCREEN: {obs.screen_width}x{obs.screen_height}",
@@ -312,16 +334,27 @@ class ComputerAgent:
             parts = [f"{k}: {v}" for k, v in context.items()]
             prompt_parts.append("CONTEXT: " + " | ".join(parts))
         if self._history:
-            prompt_parts.append(f"HISTORY: {' | '.join(self._history[-5:])}")
+            prompt_parts.append(f"EXECUTION HISTORY: {' | '.join(self._history[-5:])}")
         prompt_parts.append("\nLook at the screenshot. Analyze the current state and decide the next 1-3 steps.")
 
-        full_prompt = _SYSTEM_PROMPT + "\n\n" + "\n".join(prompt_parts)
+        full_prompt = "\n".join(prompt_parts)
+
+        # Build conversation history with system prompt + previous turns
+        system_msg = {"role": "system", "content": _SYSTEM_PROMPT}
+        history = [system_msg] + self._conversation_history
 
         # Timeout-protected LLM call (60s — normal calls complete in ~8s, but occasional ones take 30s+)
         raw = await asyncio.wait_for(
-            vision_chat(text_prompt=full_prompt, image_path=obs.screenshot_path, max_tokens=1024),
+            vision_chat(text_prompt=full_prompt, image_path=obs.screenshot_path, max_tokens=1024, history_messages=history),
             timeout=60,
         )
+
+        # Append this turn to conversation history (without the image to save tokens)
+        self._conversation_history.append({"role": "user", "content": full_prompt})
+        self._conversation_history.append({"role": "assistant", "content": raw})
+        # Keep last 10 turns to avoid token explosion
+        if len(self._conversation_history) > 20:
+            self._conversation_history = self._conversation_history[-20:]
 
         try:
             data = json.loads(_extract_json(raw))

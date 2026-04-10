@@ -69,27 +69,30 @@ async def vision_chat(
     *,
     model: str | None = None,
     max_tokens: int | None = None,
+    history_messages: list[dict] | None = None,
 ) -> str:
-    """Send a screenshot + text prompt to the vision model."""
+    """Send a screenshot + text prompt to the vision model.
+
+    Supports multi-turn conversation via history_messages — previous turns
+    (including prior screenshots and AI responses) are preserved as context,
+    matching qwen_autogui's conversation_history pattern.
+    """
     s = get_settings()
     img_bytes = Path(image_path).read_bytes()
     b64 = base64.b64encode(img_bytes).decode()
 
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{b64}"},
-                },
-                {"type": "text", "text": text_prompt},
-            ],
-        }
-    ]
+    current_message = {
+        "role": "user",
+        "content": [
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+            {"type": "text", "text": text_prompt},
+        ],
+    }
+
+    messages = (history_messages or []) + [current_message]
     client = get_client()
     m = model or s.llm_vision_model
-    logger.debug(f"Vision call model={m} image={Path(image_path).name}")
+    logger.debug(f"Vision call model={m} image={Path(image_path).name} history={len(history_messages or [])}")
     resp = await client.chat.completions.create(
         model=m,
         messages=messages,

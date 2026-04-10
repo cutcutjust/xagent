@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import random
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pyautogui
@@ -27,7 +29,8 @@ async def _run_sync(fn, *args, **kwargs):
 async def execute_desktop(action: PlannedAction) -> str | None:
     """执行一条桌面动作。"""
     atype = action.action
-    logger.debug(f"[桌面] 执行 {atype.value}: {action.reason[:60]}")
+    reason = (action.reason or "")[:60]
+    logger.debug(f"[桌面] 执行 {atype.value}: {reason}")
 
     if atype == ActionType.MOVE_TO:
         x, y = _resolve_coords(action)
@@ -70,7 +73,7 @@ async def execute_desktop(action: PlannedAction) -> str | None:
 
     elif atype == ActionType.DRAG_TO:
         x, y = _resolve_coords(action)
-        duration = action.y or 0.5
+        duration = action.seconds or action.dx or 0.5
         sx, sy = pyautogui.position()
         await _run_sync(pyautogui.drag, x - sx, y - sy, duration=duration)
         await _human_pause(0.3, 0.8)
@@ -116,21 +119,40 @@ async def execute_desktop(action: PlannedAction) -> str | None:
     return None
 
 
-def _move_human_like(x: int, y: int, duration: float = 0.3) -> None:
-    """带随机抖动的鼠标移动，更像人类。"""
+def _move_human_like(x: int, y: int, duration: float | None = None) -> None:
+    """带贝塞尔曲线 + 随机抖动的拟人鼠标移动。"""
+    # 自适应速度：远距离移动更慢
+    cx, cy = pyautogui.position()
+    dist = math.hypot(x - cx, y - cy)
+    if duration is None:
+        duration = max(0.15, min(0.6, dist / 2000))  # 0.15-0.6s 自适应
+
+    # 随机抖动
     tx = x + random.randint(-_MOVE_JITTER, _MOVE_JITTER)
     ty = y + random.randint(-_MOVE_JITTER, _MOVE_JITTER)
-    # 用 tweener 模拟人类曲线移动
-    pyautogui.moveTo(tx, ty, duration=duration, tween=pyautogui.easeOutQuad)
+
+    # 随机中间点模拟人类非直线路径
+    mid_x = (cx + tx) / 2 + random.randint(-20, 20)
+    mid_y = (cy + ty) / 2 + random.randint(-20, 20)
+
+    # 二次贝塞尔曲线插值
+    steps = max(10, int(duration * 60))
+    for i in range(steps + 1):
+        t = i / steps
+        # 二次贝塞尔: (1-t)²*P0 + 2(1-t)t*P1 + t²*P2
+        px = (1-t)**2 * cx + 2*(1-t)*t * mid_x + t**2 * tx
+        py = (1-t)**2 * cy + 2*(1-t)*t * mid_y + t**2 * ty
+        pyautogui.moveTo(px + random.uniform(-1, 1), py + random.uniform(-1, 1))
+        time.sleep(duration / steps)
 
 
 def _resolve_coords(action: PlannedAction) -> tuple[int, int]:
-    """获取 x,y 坐标，裁剪到屏幕范围内。"""
+    """将 1000x1000 归一化坐标映射到实际屏幕像素坐标。"""
     if action.x is None or action.y is None:
         raise ActionFailed(f"动作 {action.action.value} 需要 x 和 y 坐标")
     screen_w, screen_h = pyautogui.size()
-    x = max(0, min(int(action.x), screen_w - 1))
-    y = max(0, min(int(action.y), screen_h - 1))
+    x = max(0, min(int(action.x / 1000 * screen_w), screen_w - 1))
+    y = max(0, min(int(action.y / 1000 * screen_h), screen_h - 1))
     return x, y
 
 
