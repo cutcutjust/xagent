@@ -38,6 +38,7 @@ class CollectedContent(BaseModel):
     summary: str = ""
     relevance_score: float = 0.0     # 1-5
     engagement_score: float = 0.0   # likes + reposts*1.5 + comments*2 + views*0.01
+    final_score: float = 0.0       # 综合评分: relevance*0.3 + engagement*0.4 + freshness*0.3
     tags: list[str] = []
     external_links: list[str] = []    # external URLs extracted from post body
     comment_links: list[str] = []     # X /status/ URLs of reply posts

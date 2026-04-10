@@ -4,11 +4,11 @@
 
 **X 平台 AI 调研与操作 Agent**
 
-纯 API 快速调研 · 视觉深度采集 · 发推互动
+纯 API 快速调研 · 综合评分筛选 · 交互式引导 · 发推互动
 
 ---
 
-`research` → `report` → `analyze` → `write` → `publish`
+`explore` → `research` → `report` → `analyze` → `write` → `publish`
 
 </div>
 
@@ -16,12 +16,13 @@
 
 ## 特性
 
-- **纯 API 调研** — 无需浏览器，无需桌面权限，Bearer Token 直连 X API
-- **视觉深度采集** — 可选 `--mode visual`，截图 + 视觉模型提取图片/完整正文
-- **热度排序** — 加权打分：likes + reposts×1.5 + replies×2 + views×0.01
-- **实时保存** — 每帖立即持久化到 SQLite + 本地 MD + Notion
-- **LLM 全链路** — 相关性打分、摘要、标签、风格分析、草稿生成
-- **拟人操作** — 贝塞尔曲线鼠标 + 随机打字间隔 + 卡死检测
+- **交互式入口** — 直接输入 `xagent`，引导选择操作流程
+- **模糊概念引导** — `xagent explore "mythos"` 自动拆解方向，选择后调研
+- **综合评分** — 相关性(30%) + 互动热度(40%) + 时效性(30%)，不再仅靠 LLM 打分
+- **纯 API 调研** — 无需浏览器/桌面权限，Bearer Token 直连 X API
+- **视觉深度采集** — 可选 `--mode visual`，截图+视觉模型提取图片/完整正文
+- **实时保存** — 每帖持久化到 SQLite + 本地 MD + Notion
+- **下一步引导** — 每步操作后自动提示可用的后续命令
 
 ---
 
@@ -44,8 +45,10 @@ source ~/.zshrc
 # 4. 初始化
 xagent setup
 
-# 5. 调研
-xagent research "AI agent"
+# 5. 开始（三种方式）
+xagent                    # 交互模式，引导选择
+xagent explore "mythos"   # 模糊概念 → 拆解方向 → 调研
+xagent research "AI agent" # 直接调研
 ```
 
 > 纯 API 模式无需任何系统权限。`--mode visual` 需 macOS 屏幕录制 + 辅助功能授权。
@@ -56,56 +59,83 @@ xagent research "AI agent"
 
 | 命令 | 说明 |
 |------|------|
-| `xagent setup` | 初始化 — 检查环境 / 配置 / 权限 / 数据库 |
+| `xagent` | 交互模式 — 引导选择操作 |
+| `xagent explore "概念"` | 模糊概念引导 — LLM 拆解方向 → 选择 → 调研 |
 | `xagent research "主题"` | 调研 — `--mode api`（默认）或 `--mode visual` |
 | `xagent report "主题"` | 报告 — `--type research\|article\|summary`，带引用 |
 | `xagent analyze` | 分析 — 爆款风格：钩子类型 / 叙事结构 / 风格分布 |
 | `xagent write` | 写作 — 提取风格 → 通用草稿 → 平台适配 |
 | `xagent publish` | 发布 — 视觉操作发布到 X |
 | `xagent status` | 总览 — 采集统计 / 草稿 / 排行 |
+| `xagent setup` | 初始化 — 检查环境 / 配置 / 权限 / 数据库 |
 | `xagent observe` | 观察 — 实时截图 + LLM 分析 |
 
 ---
 
 ## 使用流程
 
-### 调研
+### 交互模式
+
+```bash
+$ xagent
+
+  XAgent — X 平台 AI 调研与操作 Agent
+
+  1  🔍 探索    输入模糊概念，引导拆解方向后调研
+  2  📡 调研    直接搜索 X 上的热门话题和帖子
+  3  📊 分析    分析已采集内容的爆款风格
+  4  ✍️  写作    基于调研生成草稿
+  5  📋 总览    查看数据统计
+  6  🚀 完整流程 调研 → 报告 → 分析 → 写作
+
+  选择: 6
+```
+
+### 模糊概念引导
+
+```bash
+$ xagent explore "mythos"
+
+  「mythos」可拆解为以下方向：
+
+  1  Claude Mythos     Anthropic 即将发布的 Claude 新版本
+  2  Mythos 品牌IP     Batman/漫威周边艺术
+  3  Greek Mythos      希腊神话相关讨论
+  4  Mythos 游戏       独立游戏/桌游
+
+  选择方向（多选用逗号，0=全部）: 1
+```
+
+### 直接调研
 
 ```bash
 # 纯 API（默认，无需权限）
-xagent research "AI agent" --limit 50 --min-comments 10
+xagent research "AI agent" --limit 50
 
 # 视觉深度采集（需 macOS 权限）
 xagent research "AI agent" --mode visual
-
-# 使用 topics.yaml 默认关键词
-xagent research
 ```
 
-```
-X API 搜索 → 按热度排序 → 逐帖采集 → LLM 打分/摘要 → 实时保存
-    │              │            │            │              │
-    ▼              ▼            ▼            ▼              ▼
- Bearer      加权排序      正文/评论     相关性 1-5    SQLite + MD
- Token       Top 优先      指标/媒体     摘要+标签      + Notion
-```
+### 综合评分
 
-### 报告
+每个帖子按三维综合评分，不再仅靠 LLM 相关性：
 
-```bash
-xagent report "AI Agent 趋势"                    # 调研报告
-xagent report "AI Agent 趋势" --type article     # 长文
-xagent report "AI Agent 趋势" --type summary     # 摘要
+```
+final_score = relevance × 0.3 + engagement × 0.4 + freshness × 0.3
+              ─────────────     ──────────────     ──────────────
+              LLM 打分 1-5     互动归一化 0-5      时效性 0-5
 ```
 
-引用格式：`[来源N]（@用户名，❤赞数）`
+- **relevance**: LLM 对帖子与 AI/创业/科技的相关性打分
+- **engagement**: 批次内互动分归一化（likes + reposts×1.5 + replies×2 + views×0.01）
+- **freshness**: 7天内=5，30天内=3，更久=1
 
 ### 分析 → 写作 → 发布
 
 ```bash
+xagent report "AI Agent 趋势"                    # 调研报告
 xagent analyze --days 7                          # 爆款风格分析
 xagent write --type article --topic "AI Agent"   # 生成草稿
-xagent status                                    # 查看待发布
 xagent publish                                   # 发布到 X
 ```
 
@@ -166,7 +196,7 @@ keywords:
 research:
   topics_per_run: 10
   posts_per_topic: 30
-  relevance_threshold: 3.0
+  relevance_threshold: 2.0    # 综合评分阈值（原 3.0，现综合评分后可降低）
 writing:
   top_k_sources: 5
 ```
@@ -181,26 +211,18 @@ writing:
 APIXResearcher (--mode api)          DesktopXResearcher (--mode visual)
   │                                      │
   ├─ search_tweets() [Bearer]           ├─ search_tweets() [OAuth 1.0a]
-  ├─ sort_by_engagement()               ├─ sort_by_engagement()
-  ├─ _collect_and_save_tweet()          ├─ _collect_and_save_tweet()
+  ├─ _collect_tweet() ×N                ├─ _collect_and_save_tweet()
   │   ├─ API 取正文/指标/媒体           │   ├─ 视觉提取正文/指标
   │   ├─ fetch_tweet_replies()          │   ├─ fetch_tweet_replies()
-  │   ├─ LLM 打分 + 摘要 + 标签        │   ├─ 视觉图片分析
-  │   └─ save → SQLite + MD + Notion    │   └─ save → SQLite + MD + Notion
-  │                                      │
+  │   └─ LLM 相关性打分                │   ├─ 视觉图片分析
+  │                                      │   └─ LLM 打分 + 摘要
+  ├─ score_batch()                      │
+  │   └─ relevance×0.3 + engagement×0.4 + freshness×0.3
+  ├─ 筛选保存                           │
+  │   └─ save → SQLite + MD + Notion    └─ save → SQLite + MD + Notion
+  │
   └─ 无需浏览器/权限                     └─ 需 macOS 权限
 ```
-
-### ComputerAgent — 视觉循环大脑（visual 模式）
-
-```
-SEE (截图) → THINK (LLM + 计划上下文) → ACT (拟人操作) → VERIFY (下一帧截图) → 循环
-```
-
-- 计划上下文注入：LLM 看到 `OVERALL PLAN`（已完成 → 当前 → 下一步）
-- 卡死检测：连续 8 次相同动作 → 终止
-- 重复完成检测：连续 2 次无实际动作 → 主动退出
-- 拟人执行：贝塞尔曲线鼠标 + 随机打字间隔 + 1000×1000 归一化坐标
 
 ### 数据流
 
@@ -217,29 +239,25 @@ CollectedContent ──→ SQLite ──→ analyze / report / write
 
 ```
 app/
-  cli/               Typer CLI（Rich 美化）
+  cli/               Typer CLI（交互入口 + Rich 美化）
   core/              配置 · 错误 · 日志
-  schemas/           数据模型
+  schemas/           数据模型（CollectedContent 含 final_score）
   llm/               LLM 客户端（OpenAI 兼容）
   research/          纯 API 调研
     api_researcher.py    APIXResearcher
+    scorer.py            综合评分（relevance + engagement + freshness）
   desktop/           视觉桌面控制
     computer_agent.py    see-think-act-verify 循环
     executor.py          拟人执行器
-    observer.py          截图观察
     research_agent.py    DesktopXResearcher + 公共 LLM 函数
     publisher.py         X 发布器
-    permissions.py       macOS 权限
-  observer/          实时屏幕观察
-  analysis/          爆款风格挖掘
+  analysis/          爆款风格挖掘 + 报告生成
   writing/           内容生成
   integrations/      X API · Notion API
   memory/            SQLite 存储
-  platforms/         平台插件（可扩展）
 configs/             YAML 配置
 prompts/             LLM 模板
 data/                运行时数据
-scripts/             工具脚本
 ```
 
 ---

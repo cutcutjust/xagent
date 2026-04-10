@@ -10,6 +10,7 @@ from app.core.logger import logger
 from app.llm.client import chat
 from app.memory.sqlite_repo import save_content, save_reference, save_content_to_md
 from app.desktop.research_agent import score_relevance, summarize_content, extract_tags, sync_to_notion
+from app.research.scorer import score_batch
 from app.schemas.content import CollectedContent, Comment
 from rich.console import Console
 
@@ -20,7 +21,7 @@ class APIXResearcher:
     """X 调研 — 纯 API，无需 DesktopAgent / 浏览器 / macOS 权限。"""
 
     def __init__(self):
-        self._collected_urls: set[str] = set()
+        self._collected_ids: set[str] = set()
         self._total_collected = 0
 
     # ── 主流程 ────────────────────────────────────────────────────────
@@ -30,8 +31,8 @@ class APIXResearcher:
 
         1. 用 X API 搜索每个主题
         2. 按互动量排序
-        3. 对每个帖子：直接取 API 数据 → 获取评论(API) → LLM 打分/摘要
-        4. 每采集完一个帖子立即保存到 SQLite + 本地 MD + Notion
+        3. 逐帖采集：API 正文/评论 → LLM 相关性打分/摘要
+        4. 全部采集后综合评分（相关性 + 互动 + 时效），筛选保存
         """
         cfg = load_yaml("configs/app.yaml")
         r = cfg["research"]
@@ -41,14 +42,11 @@ class APIXResearcher:
         if topics is None:
             topics = topic_cfg.get("keywords", [])
 
-        all_posts: list[dict] = []
+        # Phase 1: 采集所有帖子（不做筛选）
+        all_contents: list[CollectedContent] = []
         posts_per_topic = max(target_posts // max(len(topics[:topics_per_run]), 1), 10)
 
         for topic in topics[:topics_per_run]:
-            if self._total_collected >= target_posts:
-                console.print(f"[dim]已达到目标 {target_posts} 个帖子，停止[/dim]")
-                break
-
             console.print(f"\n[cyan]{'='*50}[/cyan]")
             console.print(f"[bold cyan]📡 API 搜索: {topic}[/bold cyan] (目标 {posts_per_topic} 帖)")
             console.print(f"[cyan]{'='*50}[/cyan]")
@@ -65,41 +63,100 @@ class APIXResearcher:
                 console.print(f"    [dim]API 返回 {len(tweets)} 条，按互动量排序[/dim]")
 
                 for tweet in tweets:
-                    if self._total_collected >= target_posts:
+                    if len(all_contents) >= target_posts:
                         break
 
                     # 去重
-                    if tweet.id in self._collected_urls:
+                    if tweet.id in self._collected_ids:
                         continue
-                    self._collected_urls.add(tweet.id)
+                    self._collected_ids.add(tweet.id)
 
-                    post_data = await self._collect_and_save_tweet(
-                        tweet, topic, min_comments=min_comments
-                    )
-                    if post_data:
-                        all_posts.append(post_data)
+                    content = await self._collect_tweet(tweet, topic, min_comments=min_comments)
+                    if content:
+                        all_contents.append(content)
 
-                console.print(f"\n  [green]✓ {topic}: 已采集 {len([p for p in all_posts if p.get('topic') == topic])} 个帖子[/green]")
+                console.print(f"\n  [green]✓ {topic}: 已采集 {len([c for c in all_contents if 'topic' not in c.raw_metadata or c.raw_metadata.get('topic') == topic])} 条[/green]")
                 await asyncio.sleep(random.uniform(2, 4))
 
             except Exception as e:
                 console.print(f"    [yellow]搜索失败: {e}[/yellow]")
                 continue
 
-        logger.info(f"API 调研完成: 共采集 {self._total_collected} 个帖子")
-        return all_posts
+        if not all_contents:
+            logger.info("API 调研完成: 未采集到帖子")
+            return []
 
-    # ── 单个帖子采集 + 实时保存 ──────────────────────────────────────
+        # Phase 2: 综合评分 + 筛选 + 保存
+        console.print(f"\n[bold]📊 综合评分（相关性×0.3 + 互动×0.4 + 时效×0.3）...[/bold]")
+        scored = score_batch(all_contents)
 
-    async def _collect_and_save_tweet(self, tweet, topic: str, min_comments: int = 10) -> dict | None:
-        """采集单个帖子（纯 API），立即保存到 MD + Notion + SQLite。"""
+        threshold = cfg["research"].get("relevance_threshold", 2.0)
+        saved: list[dict] = []
+
+        for content in scored:
+            if content.final_score < threshold:
+                console.print(
+                    f"  [dim]跳过 @{content.author} "
+                    f"(综合 {content.final_score:.1f} < {threshold})[/dim]"
+                )
+                save_reference(content.source_url, "x", source="api", was_collected=False)
+                continue
+
+            # 摘要 + 标签（仅对通过筛选的帖子做，省 API 调用）
+            if not content.summary:
+                content.summary = await summarize_content(content)
+            if not content.tags:
+                content.tags = await extract_tags(content)
+
+            # 保存
+            save_content(content)
+            md_path = save_content_to_md(content)
+            console.print(
+                f"  [green]✓[/green] @{content.author} "
+                f"| ❤{content.metrics.likes} 🔁{content.metrics.reposts} "
+                f"| 💬{len(content.comments)} 👁{content.metrics.views} "
+                f"| ⭐{content.final_score:.1f} "
+                f"| MD:{md_path.split('/')[-1]}"
+            )
+
+            save_reference(
+                content.source_url, "x",
+                content_id=content.content_id,
+                title=f"@{content.author}: {content.body_text[:80]}",
+                was_collected=True,
+                source="api",
+            )
+
+            await sync_to_notion(content)
+            self._total_collected += 1
+
+            saved.append({
+                "author": content.author,
+                "text_preview": content.body_text[:80],
+                "topic": content.raw_metadata.get("topic", ""),
+                "likes": content.metrics.likes,
+                "views": content.metrics.views,
+                "reposts": content.metrics.reposts,
+                "replies": len(content.comments),
+                "engagement_score": content.engagement_score,
+                "final_score": content.final_score,
+                "relevance_score": content.relevance_score,
+            })
+
+        logger.info(f"API 调研完成: 采集 {len(all_contents)} 条，保存 {self._total_collected} 条")
+        return saved
+
+    # ── 单帖采集（不筛选，不保存）────────────────────────────────────
+
+    async def _collect_tweet(self, tweet, topic: str, min_comments: int = 10) -> CollectedContent | None:
+        """采集单个帖子数据（正文+评论+相关性），不做筛选和保存。"""
         from app.integrations.x_api import fetch_tweet_replies, sort_comments
 
         author = tweet.author_username
         console.print(f"\n  [dim]▶ @{author} ❤{tweet.likes} 💬{tweet.replies} 👁{tweet.views}")
         console.print(f"    {tweet.text[:80]}...")
 
-        # 1. 直接从 API Tweet 对象构建 CollectedContent
+        # 1. 构建 CollectedContent
         content_id = f"x:{author}:{tweet.id}"
         content = CollectedContent(
             content_id=content_id,
@@ -110,12 +167,12 @@ class APIXResearcher:
             body_text=tweet.text,
             external_links=self._extract_links(tweet.text),
             images=tweet.media if tweet.media else [],
+            raw_metadata={"topic": topic},
         )
         content.metrics.likes = tweet.likes
         content.metrics.reposts = tweet.reposts
         content.metrics.replies = tweet.replies
         content.metrics.views = tweet.views
-        content.metrics.bookmarks = 0
 
         if tweet.created_at:
             try:
@@ -123,13 +180,7 @@ class APIXResearcher:
             except Exception:
                 pass
 
-        console.print(
-            f"      [dim]正文: {len(content.body_text)} 字 | "
-            f"❤{content.metrics.likes} 🔁{content.metrics.reposts} "
-            f"💬{content.metrics.replies} 👁{content.metrics.views}[/dim]"
-        )
-
-        # 2. 用 API 获取评论
+        # 2. 获取评论
         console.print(f"    [cyan]📥 获取评论...[/cyan]")
         comments = fetch_tweet_replies(tweet.id, max_results=max(min_comments, 15))
         if comments:
@@ -142,19 +193,7 @@ class APIXResearcher:
         else:
             console.print(f"    [dim]  无评论[/dim]")
 
-        # 3. 相关性打分
-        threshold = load_yaml("configs/app.yaml")["research"].get("relevance_threshold", 3.0)
-        content.relevance_score = await score_relevance(content)
-        if content.relevance_score < threshold:
-            console.print(f"    [dim]  跳过 (相关性 {content.relevance_score:.1f} < {threshold})[/dim]")
-            save_reference(content.source_url, "x", source="api", was_collected=False)
-            return None
-
-        # 4. 摘要 + 标签
-        content.summary = await summarize_content(content)
-        content.tags = await extract_tags(content)
-
-        # 5. 计算综合权重
+        # 3. 计算互动分
         content.engagement_score = (
             content.metrics.likes
             + content.metrics.reposts * 1.5
@@ -162,38 +201,15 @@ class APIXResearcher:
             + content.metrics.views * 0.01
         )
 
-        # ★ 实时保存
-        save_content(content)
-        md_path = save_content_to_md(content)
+        # 4. LLM 相关性打分
+        content.relevance_score = await score_relevance(content)
         console.print(
-            f"    [green]✓ 已保存[/green] @{content.author} "
-            f"| ❤{content.metrics.likes} 🔁{content.metrics.reposts} "
-            f"| 💬{len(content.comments)} 👁{content.metrics.views} "
-            f"| ⭐权重:{content.engagement_score:.0f} "
-            f"| MD:{md_path.split('/')[-1]}"
+            f"    [dim]相关性 {content.relevance_score:.1f} | "
+            f"❤{content.metrics.likes} 🔁{content.metrics.reposts} "
+            f"💬{len(content.comments)} 👁{content.metrics.views}[/dim]"
         )
 
-        save_reference(
-            content.source_url, "x",
-            content_id=content.content_id,
-            title=f"@{content.author}: {content.body_text[:80]}",
-            was_collected=True,
-            source="api",
-        )
-
-        await sync_to_notion(content)
-        self._total_collected += 1
-
-        return {
-            "author": author,
-            "text_preview": tweet.text[:80],
-            "topic": topic,
-            "likes": content.metrics.likes,
-            "views": content.metrics.views,
-            "reposts": content.metrics.reposts,
-            "replies": len(content.comments),
-            "engagement_score": content.engagement_score,
-        }
+        return content
 
     # ── 辅助 ─────────────────────────────────────────────────────────
 
