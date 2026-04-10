@@ -89,10 +89,10 @@ class DesktopXResearcher:
     # ── 滚动提取帖子 ──────────────────────────────────────────────────
 
     async def _scroll_and_extract_posts(self, topic: str, max_posts: int = 20) -> list[dict]:
-        """视觉驱动：模型决定如何滚动 + 识别帖子。"""
-        console.print("[cyan]滚动加载帖子...[/cyan]")
+        """边滚动边深度采集：每看到一个帖子就点进去完整分析（正文、图片、评论、指标），然后返回继续。"""
+        console.print("[cyan]深度调研开始 — 逐一点开分析...[/cyan]")
         posts_found: list[dict] = []
-        prev_post_count = 0
+        posts_deep: set[str] = set()  # track deep-collected posts
         no_new_rounds = 0
 
         for round_num in range(12):
@@ -104,9 +104,12 @@ class DesktopXResearcher:
                         "这是 X 搜索结果页面的截图。\n"
                         "识别每条可见帖子的：\n"
                         "  - author: 用户名（不含@）\n"
-                        "  - text_preview: 正文前50字\n"
+                        "  - text_preview: 正文前80字\n"
                         "  - likes: 点赞数（如果可见）\n"
-                        "  - engagement: 互动数（如果有）\n"
+                        "  - views: 阅读数（如果可见）\n"
+                        "  - replies: 评论数（如果可见）\n"
+                        "  - has_image: 是否包含图片\n"
+                        "  - post_url: 帖子URL（如果能看到）\n"
                         "返回 JSON 数组，最多10条（当前屏幕可见的）。\n"
                         "如果看不到帖子，返回 []。\n"
                         "只返回 JSON 数组，不要任何其他文字。"
@@ -123,40 +126,60 @@ class DesktopXResearcher:
                 data = _safe_parse_json_array(raw)
                 if isinstance(data, dict) and "posts" in data:
                     data = data["posts"]
-                if isinstance(data, list):
-                    new_posts = [p for p in data if p.get("author")]
-                    for p in new_posts:
-                        key = f"{p['author']}:{p.get('text_preview', '')[:30]}"
-                        if key not in {f"{x['author']}:{x.get('text_preview', '')[:30]}" for x in posts_found}:
-                            posts_found.append(p)
-                            console.print(
-                                f"    [dim]发现: @{p['author']} — {p.get('text_preview', '')[:40]}[/dim]"
-                            )
-                    if len(posts_found) >= max_posts:
-                        break
-
-                    if len(posts_found) == prev_post_count:
-                        no_new_rounds += 1
-                        if no_new_rounds >= 3:
-                            console.print(f"    [yellow]连续 {no_new_rounds} 轮无新帖子[/yellow]")
-                            break
-                    else:
-                        no_new_rounds = 0
-                    prev_post_count = len(posts_found)
-                else:
-                    logger.warning(f"帖子识别返回非数组类型: {type(data)}")
+                if not isinstance(data, list):
+                    data = []
             except Exception as e:
                 logger.warning(f"帖子识别失败: {e}")
-                logger.debug(f"原始返回: {raw[:300]}")
+                data = []
 
-            # 用 ComputerAgent 控制滚动（模型决定滚动方式）
+            # 对当前屏幕可见的每个帖子，逐一点开深度采集
+            new_posts = [p for p in data if p.get("author")]
+            for p in new_posts:
+                if len(posts_found) >= max_posts:
+                    break
+                key = f"{p['author']}:{p.get('text_preview', '')[:40]}"
+                if key in posts_deep:
+                    continue
+                posts_deep.add(key)
+                posts_found.append(p)
+                console.print(f"    [dim]发现: @{p['author']} — {p.get('text_preview', '')[:50]}[/dim]")
+
+                # ★ 深度采集这个帖子
+                p["topic"] = topic
+                try:
+                    result = await self._deep_collect_from_search(p)
+                    if result:
+                        console.print(
+                            f"    [green]✓ @{p['author']} 已保存 "
+                            f"❤{result.metrics.likes} 🔁{result.metrics.reposts} "
+                            f"💬{len(result.comments)} 👁{result.metrics.views} "
+                            f"🖼{len(result.images)}[/green]"
+                        )
+                except Exception as e:
+                    logger.warning(f"深度采集 @{p['author']} 失败: {e}")
+                    # 确保回到搜索结果
+                    await self._go_back()
+
+                await asyncio.sleep(random.uniform(1, 2))
+
+            if len(posts_found) >= max_posts:
+                break
+
+            # 滚动加载更多
+            if len(new_posts) == 0:
+                no_new_rounds += 1
+                if no_new_rounds >= 3:
+                    console.print(f"    [yellow]连续 {no_new_rounds} 轮无新帖子[/yellow]")
+                    break
+            else:
+                no_new_rounds = 0
+
             try:
                 await self.agent.run(
-                    "Scroll down the page to load more posts. Use Space, PageDown, or drag the scrollbar.",
+                    "Scroll down the X search results page to load more posts. Use Space or PageDown.",
                     max_cycles=3,
                 )
             except Exception:
-                # 回退：直接按空格
                 from app.desktop.executor import execute_desktop
                 from app.schemas.action import ActionType, PlannedAction
                 await execute_desktop(PlannedAction(
@@ -166,8 +189,115 @@ class DesktopXResearcher:
 
             await asyncio.sleep(2)
 
-        console.print(f"  [dim]共识别 {len(posts_found)} 个帖子[/dim]")
+        console.print(f"  [dim]共发现 {len(posts_found)} 个帖子，已深度采集[/dim]")
         return posts_found[:max_posts]
+
+    async def _deep_collect_from_search(self, post_info: dict) -> CollectedContent | None:
+        """从搜索结果页点进帖子，深度采集正文、图片、评论、指标，然后返回。"""
+        author = post_info.get("author", "")
+        preview = post_info.get("text_preview", "")
+        topic = post_info.get("topic", "")
+        threshold = load_yaml("configs/app.yaml")["research"].get("relevance_threshold", 3.0)
+
+        # Step 1: 点击帖子
+        try:
+            await self.agent.run(
+                f"Click on the visible post by @{author} to open its detail page. Look for the author name and post text that match.",
+                context={"target_author": author, "text_preview": preview[:40]},
+            )
+        except Exception:
+            console.print(f"    [yellow]点击 @{author} 帖子失败[/yellow]")
+            return None
+
+        await asyncio.sleep(2)
+
+        # Step 2: 提取帖子内容
+        obs = await observe_desktop(f"提取帖子内容")
+        post_data = await self._extract_post_content(obs.screenshot_path, author)
+        if not post_data:
+            console.print(f"    [yellow]无法提取 @{author} 内容，滚动再试[/yellow]")
+            try:
+                await self.agent.run("Scroll down slightly to see more of the post content.", max_cycles=2)
+            except Exception:
+                pass
+            await asyncio.sleep(1)
+            obs = await observe_desktop(f"重新提取帖子内容")
+            post_data = await self._extract_post_content(obs.screenshot_path, author)
+
+        if not post_data:
+            console.print(f"    [yellow]仍无法提取，跳过 @{author}[/yellow]")
+            await self._go_back()
+            return None
+
+        content_id = f"x:{author}:{preview[:40]}"
+        source_url = post_data.get("source_url", f"https://x.com/{author}")
+
+        content = CollectedContent(
+            content_id=content_id,
+            platform="x",
+            source_url=source_url,
+            author=author,
+            title=post_data.get("title", ""),
+            body_text=post_data.get("body_text", preview),
+            external_links=post_data.get("external_links", []),
+            images=[],
+        )
+        content.metrics.likes = post_data.get("likes", 0) or 0
+        content.metrics.reposts = post_data.get("reposts", 0) or 0
+        content.metrics.replies = post_data.get("replies", 0) or 0
+        content.metrics.views = post_data.get("views", 0) or 0
+        content.metrics.bookmarks = post_data.get("bookmarks", 0) or 0
+
+        console.print(
+            f"      [dim]正文: {len(content.body_text)} 字 | "
+            f"❤{content.metrics.likes} 🔁{content.metrics.reposts} "
+            f"💬{content.metrics.replies} 👁{content.metrics.views}[/dim]"
+        )
+
+        # Step 3: 图片分析
+        if post_data.get("has_image") and post_data.get("images"):
+            console.print(f"      [cyan]检测到 {len(post_data['images'])} 张图片，分析...[/cyan]")
+            await self._analyze_images(content, post_data["images"])
+
+        # Step 4: 读取评论
+        console.print(f"      [cyan]读取评论...[/cyan]")
+        content.comments = await self._read_comments()
+
+        # Step 5: 如果指标缺失，滚动查找
+        if not content.metrics.likes and not content.metrics.views:
+            console.print(f"      [cyan]指标不可见，滚动查找...[/cyan]")
+            await self._find_metrics(content)
+
+        # Step 6: 相关性打分
+        score = await self._score_relevance(content)
+        content.relevance_score = score
+        if score < threshold:
+            console.print(f"      [dim]跳过 (score={score:.1f})[/dim]")
+            save_reference(content.source_url, "x", source="search", was_collected=False)
+            await self._go_back()
+            return None
+
+        # Step 7: 摘要 + 标签
+        content.summary = await self._summarize(content)
+        content.tags = await self._extract_tags(content)
+
+        # ★ 保存
+        save_content(content)
+
+        save_reference(
+            content.source_url, "x",
+            content_id=content.content_id,
+            title=f"@{content.author}: {content.body_text[:80]}",
+            was_collected=True,
+            source="search",
+        )
+
+        # 同步 Notion
+        await self._sync_to_notion(content)
+
+        # 返回搜索结果
+        await self._go_back()
+        return content
 
     # ── 深度采集帖子详情 ──────────────────────────────────────────────
 

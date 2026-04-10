@@ -74,7 +74,6 @@ def research(
 
 
 async def _research_async(topics: list[str], limit: int):
-    from app.core.errors import HumanReviewRequired
     from app.desktop.permissions import check_all_permissions
     from app.desktop.research_agent import DesktopXResearcher
     from app.memory.sqlite_repo import count_references
@@ -93,25 +92,9 @@ async def _research_async(topics: list[str], limit: int):
         console.print("[yellow]未发现相关帖子[/yellow]")
         return
 
-    console.print(f"找到 [bold]{len(posts)}[/bold] 个候选帖子 — 最多采集 {limit} 条")
-
-    collected = 0
-    for i, post in enumerate(posts[:limit], 1):
-        author = post.get("author", "?")
-        preview = post.get("text_preview", "")[:40]
-        console.print(f"  [{i}/{min(len(posts), limit)}] @{author} — {preview}")
-        try:
-            content = await researcher.collect(post)
-            if content:
-                collected += 1
-        except HumanReviewRequired as e:
-            console.print(f"    [yellow]需要人工: {e}[/yellow]")
-        except Exception as e:
-            console.print(f"    [red]失败: {e}[/red]")
-
     total_refs, collected_refs = count_references("x")
     console.print(
-        f"\n[bold green]调研完成:[/bold green] {collected} 条已采集\n"
+        f"\n[bold green]调研完成:[/bold green] {len(posts)} 条帖子已深度采集\n"
         f"[dim]引用记录: {total_refs} 条 URL "
         f"({collected_refs} 已采集, {total_refs - collected_refs} 已浏览/跳过)[/dim]"
     )
