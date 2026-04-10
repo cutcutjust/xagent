@@ -38,7 +38,7 @@ from app.memory.sqlite_repo import (
 
 cli = typer.Typer(
     name="xagent",
-    help="XAgent — 全屏视觉 AI 调研 Agent",
+    help="XAgent — X 平台智能调研 Agent",
     rich_markup_mode="rich",
     add_completion=False,
     invoke_without_command=True,
@@ -90,11 +90,11 @@ def _next_steps(*steps: str) -> None:
 
 @cli.callback(invoke_without_command=True)
 def main(ctx: typer.Context):
-    """XAgent — 全屏视觉 AI 调研 Agent。"""
+    """XAgent — X 平台智能调研 Agent。"""
     if ctx.invoked_subcommand is not None:
         return
 
-    _banner("XAgent", "全屏视觉 AI 调研 Agent")
+    _banner("XAgent", "X 平台智能调研 Agent")
     menu = Table.grid(padding=(0, 2))
     menu.add_column("序号", style=BRAND, width=4)
     menu.add_column("功能")
@@ -279,7 +279,7 @@ def _build_context(query: str, directions: list[dict]) -> dict:
 @cli.command()
 def setup():
     """初始化项目 — 首次使用运行此命令。"""
-    _banner("XAgent Setup", "全屏视觉 AI 调研 Agent v0.1.0")
+    _banner("XAgent Setup", "X 平台智能调研 Agent v0.1.0")
 
     s = get_settings()
 
